@@ -1,0 +1,22 @@
+{
+  "ui": {
+    "documentListWidth": 280,
+    "editorWidth": 1,
+    "backgroundColor": "#f6f8fa",
+    "sidebarBackground": "#ffffff",
+    "headerBackground": "#24292f",
+    "linkColor": "#0566d2"
+  },
+  "markdown": {
+    "codeBlockBackground": "#f6f8fa",
+    "codeBlockTextColor": "#24262e",
+    "blockquoteBorderColor": "#dfe2e6",
+    "tableBorderColor": "#d0d7de",
+    "tableHeaderBackground": "#f6f8fa",
+    "heading1Size": 28,
+    "heading2Size": 24,
+    "codeFontFamily": "Cascadia Code,Consolas,Microsoft YaHei Mono,monospace",
+    "bodyFontFamily": "Microsoft YaHei UI,Segoe UI,PingFang SC,sans-serif",
+    "linkColor": "#0566d2"
+  }
+}

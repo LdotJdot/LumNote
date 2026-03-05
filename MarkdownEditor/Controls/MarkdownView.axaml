@@ -1,0 +1,15 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:MarkdownEditor.Controls"
+             x:Class="MarkdownEditor.Controls.MarkdownView"
+             x:CompileBindings="True"
+             Background="Transparent">
+
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto">
+    <StackPanel x:Name="ContentPanel"
+                Spacing="8"
+                Margin="16,12" />
+  </ScrollViewer>
+</UserControl>
+

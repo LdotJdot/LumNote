@@ -1,0 +1,18 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:MarkdownEditor.Controls"
+             x:Class="MarkdownEditor.Controls.MarkdownEngineView"
+             x:CompileBindings="True"
+             Background="#1e1e1e">
+
+  <ScrollViewer x:Name="Scroll"
+                Background="#1e1e1e"
+                HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto"
+                BringIntoViewOnFocusChange="False">
+    <controls:EngineRenderControl x:Name="RenderControl"
+                                  MinHeight="100"
+                                  VerticalAlignment="Top"/>
+  </ScrollViewer>
+</UserControl>
+

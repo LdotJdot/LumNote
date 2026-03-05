@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<linker>
+  <assembly fullname="MarkdownEditor">
+    <type fullname="MarkdownEditor.ViewModels.MainViewModel" preserve="all"/>
+    <type fullname="MarkdownEditor.ViewModels.DocumentItem" preserve="all"/>
+    <type fullname="MarkdownEditor.ViewModels.ViewModelBase" preserve="all"/>
+  </assembly>
+  <assembly fullname="Avalonia.Themes.Fluent">
+    <type fullname="*" preserve="all"/>
+  </assembly>
+</linker>

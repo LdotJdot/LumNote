@@ -1,0 +1,532 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:MarkdownEditor.Controls"
+        xmlns:vm="clr-namespace:MarkdownEditor.ViewModels"
+        xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+        x:Class="MarkdownEditor.Views.MainWindow"
+        x:Name="Root"
+        x:DataType="vm:MainViewModel"
+        x:CompileBindings="True"
+        Title="Markdown Editor"
+        SystemDecorations="Full"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaChromeHints="PreferSystemChrome"
+        ExtendClientAreaTitleBarHeightHint="32"
+        Width="1200"
+        Height="800"
+        MinWidth="800"
+        MinHeight="500"
+        Background="#1e1e1e">
+
+  <Window.Styles>
+    <!-- 通用按钮样式，偏 VSCode/Cursor 扁平风格 -->
+    <Style Selector="Button">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#f3f3f3"/>
+      <Setter Property="Padding" Value="10,4"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="Button:pointerover">
+      <Setter Property="Background" Value="#3e3e3e"/>
+    </Style>
+    <Style Selector="Button:pressed">
+      <Setter Property="Background" Value="#2d2d2d"/>
+    </Style>
+
+    <!-- Tab 样式，模拟 VSCode 顶部标签 -->
+    <Style Selector="TabControl">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="0"/>
+    </Style>
+    <!-- 通用 TabItem 样式：文字颜色/间距 -->
+    <Style Selector="TabItem">
+      <Setter Property="Foreground" Value="#cccccc"/>
+      <Setter Property="Padding" Value="10,4"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontWeight" Value="Normal"/>
+      <Setter Property="MinHeight" Value="28"/>
+    </Style>
+    <!-- 控制 TabItem 内部 Border 的背景（真正看到的底色） -->
+    <Style Selector="TabItem /template/ Border">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+    </Style>
+    <!-- Hover 未选中标签：让底色变亮，产生“发光”感 -->
+    <Style Selector="TabItem:pointerover:not(:selected) /template/ Border">
+      <Setter Property="Background" Value="#3a3d41"/>
+    </Style>
+    <!-- 选中标签：更亮背景 + 加粗文字 -->
+    <Style Selector="TabItem:selected /template/ Border">
+      <Setter Property="Background" Value="#333333"/>
+    </Style>
+    <Style Selector="TabItem:selected">
+      <Setter Property="Foreground" Value="#ffffff"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <!-- 已选中的标签在 Hover 时保持选中样式，不再套用 Hover 样式 -->
+    <Style Selector="TabItem:selected:pointerover /template/ Border">
+      <Setter Property="Background" Value="#333333"/>
+    </Style>
+    <!-- 去掉 Avalonia Fluent 默认的下划线：隐藏 PART_SelectedPipe -->
+    <Style Selector="TabItem /template/ Border#PART_SelectedPipe">
+      <Setter Property="IsVisible" Value="False"/>
+      <Setter Property="Height" Value="0"/>
+    </Style>
+    <!-- 隐藏 TabControl 默认内容区域，只保留标签头 -->
+    <Style Selector="TabControl ContentPresenter#PART_SelectedContentHost">
+      <Setter Property="IsVisible" Value="False"/>
+      <Setter Property="Height" Value="0"/>
+    </Style>
+    <!-- 活动栏按钮选中态 -->
+    <Style Selector="Button.active">
+      <Setter Property="Background" Value="#252526"/>
+    </Style>
+    <!-- 标签页关闭按钮：默认隐藏，悬停或选中时显示 -->
+    <Style Selector="TabItem Button.tab-close">
+      <Setter Property="IsVisible" Value="False"/>
+      <Setter Property="Width" Value="16"/>
+      <Setter Property="Height" Value="16"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#cccccc"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="TabItem:pointerover Button.tab-close">
+      <Setter Property="IsVisible" Value="True"/>
+    </Style>
+    <!-- 选中状态下始终显示关闭按钮 -->
+    <Style Selector="TabItem:selected Button.tab-close">
+      <Setter Property="IsVisible" Value="True"/>
+    </Style>
+
+    <!-- 竖向 GridSplitter：默认不绘制，悬停/拖动时整条变为蓝色；整体宽度 2px -->
+    <Style Selector="GridSplitter">
+      <!-- 命中区域 2px，默认完全透明，不绘制线 -->
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="Width" Value="2"/>
+      <Setter Property="Cursor" Value="SizeWestEast"/>
+    </Style>
+    <Style Selector="GridSplitter:pointerover">
+      <!-- 悬停/拖动时只绘制 1px 蓝线，尽量纤细 -->
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="1,0,0,0"/>
+      <Setter Property="BorderBrush" Value="#007acc"/>
+    </Style>
+    <Style Selector="GridSplitter:pressed">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="1,0,0,0"/>
+      <Setter Property="BorderBrush" Value="#007acc"/>
+    </Style>
+  </Window.Styles>
+
+  <Window.KeyBindings>
+    <KeyBinding Gesture="Ctrl+S" Command="{Binding SaveCommand}"/>
+  </Window.KeyBindings>
+
+  <Design.DataContext>
+    <vm:MainViewModel/>
+  </Design.DataContext>
+
+  <Grid RowDefinitions="Auto,*,Auto">
+    <!-- 顶部：标题 + 菜单（VSCode 风格标题栏，可拖动、双击最大化，支持 Windows 停靠） -->
+    <Border Grid.Row="0" Background="#252526" Padding="8,0">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto" Height="32">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="2,0,12,0">
+          <Ellipse Width="14" Height="14" Fill="#007acc" VerticalAlignment="Center"/>
+          <TextBlock Text="Markdown Editor" Margin="6,0,0,0"
+                     VerticalAlignment="Center"
+                     FontSize="13"
+                     FontWeight="SemiBold"
+                     Foreground="#f3f3f3"/>
+        </StackPanel>
+
+        <Menu Grid.Column="1" VerticalAlignment="Stretch">
+          <MenuItem Header="_文件">
+            <MenuItem Header="打开文件夹"
+                      x:Name="OpenFolderMenuItem"/>
+            <MenuItem Header="保存"
+                      x:Name="SaveMenuItem"/>
+          </MenuItem>
+        </Menu>
+
+        <Border Grid.Column="2"
+                x:Name="TitleDragArea"
+                Background="Transparent">
+          <TextBlock Text="{Binding CurrentFileName}"
+                     TextTrimming="CharacterEllipsis"
+                     MaxWidth="320"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center"
+                     FontSize="13"
+                     Foreground="#b0b0b0"
+                     IsHitTestVisible="False"/>
+        </Border>
+
+        <StackPanel Grid.Column="3"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    Spacing="8"/>
+      </Grid>
+    </Border>
+
+    <!-- 主体：侧栏（顶部活动栏 + 内容） + 右侧内容区（标签页在右侧上方） -->
+    <Grid Grid.Row="1" x:Name="MainGrid">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="260" MinWidth="180" MaxWidth="420"/>
+        <ColumnDefinition Width="4"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <!-- 侧栏：顶部为活动栏（水平），下方为 资源管理器 / 搜索 / Git -->
+      <Border Grid.Column="0"
+              x:Name="SidebarBorder"
+              Background="#252526"
+              BorderBrush="#3f3f46"
+              BorderThickness="0,0,1,0">
+        <Grid RowDefinitions="Auto,*">
+          <!-- 顶部活动栏（水平，与文档标签栏高度统一：28px） -->
+          <Border Grid.Row="0"
+                  Background="#333333"
+                  BorderBrush="#3f3f46"
+                  BorderThickness="0,0,0,1"
+                  Padding="2,2"
+                  MinHeight="32">
+            <StackPanel Orientation="Horizontal" Spacing="2"
+                        VerticalAlignment="Center">
+              <Button x:Name="ActivityExplorerButton"
+                      ToolTip.Tip="资源管理器"
+                      Width="32" Height="28"
+                      Padding="0"
+                      HorizontalContentAlignment="Center"
+                      VerticalContentAlignment="Center">
+                <Image Source="avares://MarkdownEditor/asserts/file_explorer.png"
+                       Width="12" Height="12"/>
+              </Button>
+              <Button x:Name="ActivitySearchButton"
+                      ToolTip.Tip="搜索"
+                      Width="32" Height="28"
+                      Padding="0"
+                      HorizontalContentAlignment="Center"
+                      VerticalContentAlignment="Center">
+                <Image Source="avares://MarkdownEditor/asserts/search.png"
+                       Width="12" Height="12"/>
+              </Button>
+              <Button x:Name="ActivityGitButton"
+                      ToolTip.Tip="源代码管理 (Git)"
+                      Width="32" Height="28"
+                      Padding="0"
+                      HorizontalContentAlignment="Center"
+                      VerticalContentAlignment="Center">
+                <Image Source="avares://MarkdownEditor/asserts/version_control.png"
+                       Width="12" Height="12"/>
+              </Button>
+            </StackPanel>
+          </Border>
+
+          <Grid Grid.Row="1">
+            <!-- 资源管理器 -->
+            <Grid IsVisible="{Binding ShowExplorerPane}" RowDefinitions="*">
+            <Grid Grid.Row="0" RowDefinitions="Auto,*">
+              <TextBlock Grid.Row="0"
+                         Text="文件"
+                         Margin="12,0,12,4"
+                         Foreground="#858585"
+                         FontSize="11"/>
+              <TreeView Grid.Row="1"
+                      ItemsSource="{Binding FileTreeRoot}"
+                      SelectedItem="{Binding SelectedTreeNode}"
+                      Margin="-24,0,4,4"
+                      Padding="0"
+                      Background="Transparent"
+                      BorderThickness="0"
+                      Foreground="#cccccc">
+              <TreeView.Styles>
+                <!-- 节点展开状态与 ViewModel 同步 -->
+                <Style Selector="TreeViewItem" x:DataType="vm:FileTreeNode">
+                  <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                  <Setter Property="Padding" Value="0"/>
+                  <!-- 行高更紧凑 -->
+                  <Setter Property="MinHeight" Value="18"/>
+                </Style>
+                <!-- 隐藏默认展开箭头，避免左侧留白 -->
+                <Style Selector="TreeViewItem /template/ ToggleButton">
+                  <Setter Property="IsVisible" Value="False"/>
+                  <Setter Property="Width" Value="0"/>
+                  <Setter Property="MinWidth" Value="0"/>
+                  <Setter Property="Margin" Value="0"/>
+                  <Setter Property="Padding" Value="0"/>
+                </Style>
+                <!-- 行级背景：直接作用在 TreeViewItem 上，整行（含缩进列）统一着色 -->
+                <Style Selector="TreeViewItem:selected">
+                  <Setter Property="Background" Value="#094771"/>
+                  <!-- 选中文字用略带灰的浅色而不是纯白 -->
+                  <Setter Property="Foreground" Value="#f0f0f0"/>
+                </Style>
+                <Style Selector="TreeViewItem:pointerover">
+                  <Setter Property="Background" Value="#2a2d2e"/>
+                </Style>
+                <!-- 树内箭头按钮不单独高亮，保持透明，由行高亮统一体现 -->
+                <Style Selector="TreeView TreeViewItem Button">
+                  <Setter Property="Background" Value="Transparent"/>
+                  <Setter Property="BorderThickness" Value="0"/>
+                </Style>
+                <Style Selector="TreeView TreeViewItem Button:pointerover">
+                  <Setter Property="Background" Value="Transparent"/>
+                </Style>
+                <Style Selector="TreeView TreeViewItem Button:pressed">
+                  <Setter Property="Background" Value="Transparent"/>
+                </Style>
+
+                <!-- VSCode 风格：通过 TreeViewItem 展开状态切换两个静态箭头的可见性 -->
+                <!-- 展开：隐藏右箭头，显示下箭头 -->
+                <Style Selector="TreeView.NoIndentTree TreeViewItem:expanded Image#ArrowRight">
+                  <Setter Property="IsVisible" Value="False" />
+                </Style>
+                <Style Selector="TreeView.NoIndentTree TreeViewItem:expanded Image#ArrowDown">
+                  <Setter Property="IsVisible" Value="True" />
+                </Style>
+
+                <!-- 折叠：显示右箭头，隐藏下箭头 -->
+                <Style Selector="TreeView.NoIndentTree TreeViewItem:not(:expanded) Image#ArrowRight">
+                  <Setter Property="IsVisible" Value="True" />
+                </Style>
+                <Style Selector="TreeView.NoIndentTree TreeViewItem:not(:expanded) Image#ArrowDown">
+                  <Setter Property="IsVisible" Value="False" />
+                </Style>
+              </TreeView.Styles>
+              <TreeView.ItemTemplate>
+                <TreeDataTemplate x:DataType="vm:FileTreeNode"
+                                  ItemsSource="{Binding Children}">
+                  <!-- VSCode 风格：两个静态箭头 + ViewModel 控制可见性 -->
+                  <StackPanel Orientation="Horizontal"
+                              Spacing="1"
+                              Margin="2,0,2,0"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Center"
+                              ToolTip.Tip="{Binding FullPath}">
+                    <!-- 折叠状态箭头：向右 -->
+                    <Image Source="avares://MarkdownEditor/asserts/folder_arrow_right_dark.png"
+                           Width="10"
+                           Height="10"
+                           Margin="0,0,1,0"
+                           VerticalAlignment="Center"
+                           IsVisible="{Binding ShowRightArrow}" />
+
+                    <!-- 展开状态箭头：向下 -->
+                    <Image Source="avares://MarkdownEditor/asserts/folder_arrow_down_dark.png"
+                           Width="10"
+                           Height="10"
+                           Margin="0,0,1,0"
+                           VerticalAlignment="Center"
+                           IsVisible="{Binding ShowDownArrow}" />
+
+                    <!-- 图标列：固定宽度，文件显示图标，文件夹用空字符串占位 -->
+                    <TextBlock Text="{Binding IconText}"
+                               Width="12"
+                               FontSize="12"
+                               VerticalAlignment="Center"
+                               Margin="0,0,6,0"
+                               Foreground="#cccccc"/>
+
+                    <!-- 名称 -->
+                    <TextBlock Text="{Binding DisplayName}"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="#dddddd"
+                               TextTrimming="CharacterEllipsis"/>
+                  </StackPanel>
+                </TreeDataTemplate>
+              </TreeView.ItemTemplate>
+            </TreeView>
+            </Grid>
+          </Grid>
+
+          <!-- 搜索 -->
+          <Border IsVisible="{Binding ShowSearchPane}"
+                  Background="#252526"
+                  Padding="12">
+            <StackPanel Spacing="8">
+              <TextBlock Text="搜索" FontWeight="Bold" Foreground="#cccccc"/>
+              <TextBox Text="{Binding SearchQuery}"
+                       Watermark="搜索文档..."
+                       Background="#3c3c3c"
+                       Foreground="#f3f3f3"
+                       BorderBrush="#3f3f46"
+                       CaretBrush="#ffffff"/>
+              <TextBlock Text="结果将显示于此"
+                         Foreground="#858585"
+                         FontSize="11"/>
+            </StackPanel>
+          </Border>
+
+          <!-- Git -->
+          <Border IsVisible="{Binding ShowGitPane}"
+                  Background="#252526"
+                  Padding="12">
+            <StackPanel Spacing="8">
+              <TextBlock Text="源代码管理" FontWeight="Bold" Foreground="#cccccc"/>
+              <TextBlock Text="Git 功能占位，可后续接入。"
+                         Foreground="#858585"
+                         FontSize="11"
+                         TextWrapping="Wrap"/>
+            </StackPanel>
+          </Border>
+          </Grid>
+        </Grid>
+      </Border>
+
+      <GridSplitter Grid.Column="1"
+                    ResizeDirection="Columns"
+                    ResizeBehavior="BasedOnAlignment"/>
+
+      <!-- 右侧内容区：上方为文档标签页，下方为编辑+预览 -->
+      <Grid Grid.Column="2" RowDefinitions="Auto,*">
+        <!-- 文档标签页（右侧上方） -->
+        <Border Grid.Row="0"
+                Background="#252526"
+                BorderBrush="#3f3f46"
+                BorderThickness="0">
+          <TabControl ItemsSource="{Binding OpenDocuments}"
+                      SelectedItem="{Binding ActiveDocument, Mode=TwoWay}"
+                      Margin="4,2,0,0"
+                      HorizontalAlignment="Left">
+            <TabControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:DocumentItem">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="{Binding IconText}"
+                             FontSize="12"
+                             VerticalAlignment="Center"
+                             Margin="0,0,4,0"/>
+                  <TextBlock Text="{Binding DisplayName}"
+                             FontSize="12"
+                             VerticalAlignment="Center"/>
+                  <Button Classes="tab-close"
+                          ToolTip.Tip="关闭"
+                          Command="{Binding #Root.((vm:MainViewModel)DataContext).CloseDocumentCommand}"
+                          CommandParameter="{Binding}"
+                          Content="✕"/>
+                </StackPanel>
+              </DataTemplate>
+            </TabControl.ItemTemplate>
+          </TabControl>
+        </Border>
+
+        <!-- 编辑区 + 预览区 -->
+        <Grid Grid.Row="1" x:Name="ContentSplitGrid">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="4"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+
+          <Grid Grid.Column="0"
+                RowDefinitions="Auto,*">
+            <Border Grid.Row="0"
+                    Background="#252526"
+                    Padding="8,4"
+                    BorderBrush="#3f3f46"
+                    BorderThickness="0,0,0,1">
+              <TextBlock Text="{Binding CurrentFileName, FallbackValue=未选择文档}"
+                         FontWeight="SemiBold"
+                         Foreground="#cccccc"/>
+            </Border>
+            <ae:TextEditor x:Name="EditorTextBox"
+                           Grid.Row="1"
+                           x:CompileBindings="False"
+                           ShowLineNumbers="True"
+                           HorizontalScrollBarVisibility="Auto"
+                           VerticalScrollBarVisibility="Auto"
+                           WordWrap="True"
+                           FontFamily="Consolas,Cascadia Code,monospace"
+                           FontSize="14"
+                           Padding="12,24,0,24"
+                           BorderThickness="0"
+                           Background="#1e1e1e"
+                           Foreground="#d4d4d4"/>
+          </Grid>
+
+          <GridSplitter Grid.Column="1"
+                        ResizeDirection="Columns"
+                        ResizeBehavior="BasedOnAlignment"/>
+
+          <Grid Grid.Column="2"
+                RowDefinitions="Auto,*"
+                Background="#1e1e1e">
+            <Border Grid.Row="0"
+                    Background="#252526"
+                    Padding="8,4"
+                    BorderBrush="#3f3f46"
+                    BorderThickness="0,0,0,1">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="预览"
+                           FontWeight="SemiBold"
+                           Foreground="#cccccc"/>
+                <TextBlock Text="由自研引擎渲染"
+                           Foreground="#858585"
+                           FontSize="11"/>
+              </StackPanel>
+            </Border>
+            <controls:MarkdownEngineView x:Name="PreviewEngine"
+                                         Grid.Row="1"
+                                         Markdown="{Binding CurrentMarkdown}"
+                                         StyleConfig="{Binding Config.Markdown}"/>
+          </Grid>
+        </Grid>
+      </Grid>
+    </Grid>
+
+    <!-- 底部状态栏 -->
+    <Border Grid.Row="2"
+            Background="#007acc"
+            Height="24">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="8,0">
+        <StackPanel Grid.Column="0"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    VerticalAlignment="Center">
+          <TextBlock Text="{Binding CurrentFileName, FallbackValue=未选择文档}"
+                     Foreground="White"
+                     FontSize="11"/>
+          <TextBlock Text="{Binding DocumentFolder}"
+                     Foreground="#e5e5e5"
+                     FontSize="10"
+                     TextTrimming="CharacterEllipsis"
+                     MaxWidth="260"/>
+        </StackPanel>
+
+        <StackPanel Grid.Column="2"
+                    Orientation="Horizontal"
+                    Spacing="4"
+                    VerticalAlignment="Center">
+          <TextBlock Text="布局:"
+                     Foreground="White"
+                     FontSize="10"/>
+          <Button x:Name="LayoutBothButton"
+                  Content="编辑+预览"
+                  FontSize="10"
+                  Padding="6,0"/>
+          <Button x:Name="LayoutEditorOnlyButton"
+                  Content="仅编辑"
+                  FontSize="10"
+                  Padding="6,0"/>
+          <Button x:Name="LayoutPreviewOnlyButton"
+                  Content="仅预览"
+                  FontSize="10"
+                  Padding="6,0"/>
+        </StackPanel>
+
+        <TextBlock Grid.Column="3"
+                   Text="UTF-8  |  Markdown"
+                   Foreground="White"
+                   FontSize="10"
+                   VerticalAlignment="Center"/>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

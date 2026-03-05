@@ -1,0 +1,34 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MarkdownEditor.App"
+             x:CompileBindings="True"
+             RequestedThemeVariant="Dark">
+  <Application.Styles>
+    <FluentTheme />
+
+    <!-- AvaloniaEdit 默认样式（必须引入，否则 TextEditor 无模板不显示） -->
+    <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml"/>
+
+    <!-- 全局深色窗口背景，接近 VSCode -->
+    <Style Selector="Window">
+      <Setter Property="Background" Value="#1e1e1e"/>
+    </Style>
+
+    <!-- 默认文本框深色样式，局部可覆盖 -->
+    <Style Selector="TextBox">
+      <Setter Property="Padding" Value="8,6"/>
+      <Setter Property="Background" Value="#1e1e1e"/>
+      <Setter Property="Foreground" Value="#d4d4d4"/>
+      <Setter Property="BorderBrush" Value="#3f3f46"/>
+      <Setter Property="CaretBrush" Value="#ffffff"/>
+    </Style>
+
+    <!-- 列表选中项深色高亮 -->
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="#094771"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+
+    <!-- 这里不再全局改 ScrollViewer/ScrollBar，恢复 Fluent 默认滚动条行为 -->
+  </Application.Styles>
+</Application>
