@@ -1627,7 +1627,7 @@ public partial class MainWindow : Window
             Spacing = 8,
             Children =
             {
-                new TextBlock { Text = "@ 2026", FontWeight = FontWeight.SemiBold },
+                new TextBlock { Text = "Ver 1.0.0 @ 2026", FontWeight = FontWeight.SemiBold },
                 new TextBlock { Text = "Contributors:", FontWeight = FontWeight.SemiBold },
                 new TextBlock { Text = "LdotJdot" },
                 new TextBlock { Text = "Herman Chen" },
