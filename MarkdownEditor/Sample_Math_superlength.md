@@ -1,4 +1,4 @@
-﻿# MathLaTeX 公式速查手册1234
+﻿# MathLaTeX 公式速查手册1234cxzxc
 
 $\sqrt{\sqrt{\sqrt{\sqrt{\sqrt{\sqrt{2}}}}}} = \frac{\sqrt{\sqrt{\sqrt{\sqrt{\sqrt{\sqrt{2}}}}}}}{\frac{2}{3}}$
 

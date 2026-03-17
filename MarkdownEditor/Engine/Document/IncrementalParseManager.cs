@@ -16,6 +16,14 @@ internal sealed class IncrementalParseManager
     /// <summary>与 <see cref="Blocks"/> 一一对应的源码行范围 (StartLine, EndLine)。</summary>
     public IReadOnlyList<(int startLine, int endLine)> Ranges => _ranges;
 
+    /// <summary>返回当前已解析块列表的快照，不重新解析。用于仅滚动时复用解析结果、只重算布局。</summary>
+    public BlockListSnapshot? GetCurrentSnapshot()
+    {
+        if (_blocks.Count == 0 || _ranges.Count == 0)
+            return null;
+        return new BlockListSnapshot(_blocks, _ranges);
+    }
+
     private List<MarkdownNode?> _blocks = [];
     private List<(int startLine, int endLine)> _ranges = [];
 

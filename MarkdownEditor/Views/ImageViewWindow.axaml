@@ -1,0 +1,17 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MarkdownEditor.Views.ImageViewWindow"
+        Title="图片"
+        Width="800"
+        Height="600"
+        MinWidth="200"
+        MinHeight="200"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource ContentBackground}">
+  <ScrollViewer x:Name="Scroll"
+                HorizontalScrollBarVisibility="Auto"
+                VerticalScrollBarVisibility="Auto">
+    <Image x:Name="ImageControl"
+           Stretch="None"/>
+  </ScrollViewer>
+</Window>

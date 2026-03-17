@@ -107,6 +107,9 @@ public sealed class RenderEngine
     /// <summary>获取引擎配置，供后台布局任务使用。</summary>
     internal EngineConfig GetConfig() => _config;
 
+    /// <summary>当前内容区域宽度，供调用方判断 SetWidth 是否会清空布局。</summary>
+    internal float GetWidth() => _width;
+
     public void SetWidth(float width)
     {
         var w = Math.Max(1, width);

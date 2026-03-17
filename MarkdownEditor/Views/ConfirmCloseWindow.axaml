@@ -3,17 +3,44 @@
         x:Class="MarkdownEditor.Views.ConfirmCloseWindow"
         Title="未保存的更改"
         Width="360"
-        Height="140"
+        Height="150"
+        MinWidth="320"
+        MinHeight="140"
         WindowStartupLocation="CenterOwner"
-        Background="#252526">
-  <StackPanel Margin="20" Spacing="16">
-    <TextBlock Text="当前文档有未保存的更改，是否保存？"
-               Foreground="#d4d4d4"
-               TextWrapping="Wrap"/>
-    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
-      <Button x:Name="SaveButton" Content="保存" Width="80"/>
-      <Button x:Name="DiscardButton" Content="不保存" Width="80"/>
-      <Button x:Name="CancelButton" Content="取消" Width="80"/>
+        Background="{DynamicResource ContentBackground}">
+  <Grid RowDefinitions="Auto,Auto" Margin="16">
+    <!-- 标题与说明 -->
+    <StackPanel Grid.Row="0" Spacing="6">
+      <TextBlock x:Name="TitleTextBlock"
+                 Text="当前文档有未保存的更改"
+                 FontSize="13"
+                 FontWeight="SemiBold"
+                 Foreground="{DynamicResource EditorForeground}"/>
+      <TextBlock Text="在关闭之前，要将更改保存到磁盘吗？"
+                 Margin="0,2,0,0"
+                 FontSize="11"
+                 Foreground="{DynamicResource EditorForeground}"
+                 TextWrapping="Wrap"/>
     </StackPanel>
-  </StackPanel>
+
+    <!-- 按钮行 -->
+    <StackPanel Grid.Row="1"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Margin="0,12,0,0"
+                Spacing="8">
+      <Button x:Name="SaveButton"
+              Content="保存"
+              MinWidth="88"
+              Padding="10,4"/>
+      <Button x:Name="DiscardButton"
+              Content="不保存"
+              MinWidth="88"
+              Padding="10,4"/>
+      <Button x:Name="CancelButton"
+              Content="取消"
+              MinWidth="72"
+              Padding="10,4"/>
+    </StackPanel>
+  </Grid>
 </Window>

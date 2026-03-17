@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -56,19 +57,26 @@ public class EngineRenderControl : Control
     private RenderEngine? _engine;
     private SelectionRange? _selection;
     private (int block, int offset)? _anchor;
-    private DateTime _lastSelectionInvalidate = DateTime.MinValue;
     private bool _selectionInvalidateScheduled;
 
     private readonly LayoutTaskScheduler _layoutScheduler = new();
     private readonly IncrementalParseManager _parseManager = new();
-    private DispatcherTimer? _scrollLayoutDebounce;
-    private DateTime _lastLayoutAppliedAt = DateTime.MinValue;
+    /// <summary>滚动触发布局防抖：停止滚动后约此毫秒数再触发布局，避免实时布局卡顿。</summary>
+    private const int ScrollLayoutDebounceMs = 120;
+    private DispatcherTimer? _scrollLayoutDebounceTimer;
+    /// <summary>布局刚应用后的下一次 ScrollOffset 变化忽略（由 extent 变化引起），避免“布局完成→ScrollChanged→再次布局”的级联。</summary>
+    private bool _suppressScrollLayoutAfterApply;
 
     /// <summary>上次测量时使用的有效宽度，避免 Document 变更触发的测量收到 0/NaN 导致宽度闪动。</summary>
     private double _lastValidMeasureWidth = 400;
 
     /// <summary>上次 OnSizeChanged 时的宽度，仅当宽度变化时重置引擎，避免高度变化（内容布局完成）触发重置导致闪烁循环。</summary>
     private double _lastSizeChangedWidth = -1;
+
+    /// <summary>高度大于此值视为已有有效布局；小于等于则 SetWidth 清空布局也无妨。</summary>
+    private const float LayoutHeightThreshold = 10f;
+    /// <summary>宽度变化小于此值视为未变，SetWidth 不会清空布局。</summary>
+    private const float WidthTolerance = 0.1f;
 
     private EngineConfig? _cachedEffectiveConfig;
     private MarkdownStyleConfig? _cachedConfigStyleRef;
@@ -95,6 +103,20 @@ public class EngineRenderControl : Control
             return _cachedEffectiveConfig;
         }
     }
+
+    /// <summary>当前文档所在目录，用于解析相对路径图片（如 ![alt](C3.png)）。</summary>
+    public string? DocumentBasePath
+    {
+        get => _documentBasePath;
+        set
+        {
+            if (_documentBasePath == value) return;
+            _documentBasePath = value;
+            _engine = null;
+            InvalidateVisual();
+        }
+    }
+    private string? _documentBasePath;
 
     /// <summary>请求滚动到内容坐标 contentY，用于脚注上标/↩︎ 跳转。</summary>
     public event Action<float>? RequestScrollToY;
@@ -128,21 +150,24 @@ public class EngineRenderControl : Control
                 c._engine = null;
                 c._cachedEffectiveConfig = null;
                 c._cachedConfigStyleRef = null;
+                // 样式（包括背景色、字体大小等）变化时，确保当前帧重绘。
+                c.InvalidateMeasure();
+                c.InvalidateVisual();
             }
         );
         DocumentProperty.Changed.AddClassHandler<EngineRenderControl>(
             (c, _) =>
             {
-                Debug.WriteLine($"[Layout] DocumentProperty.Changed -> TriggerParseAndLayout");
                 c._selection = null;
                 c._anchor = null;
-                c.TriggerParseAndLayout(null, null);
             }
         );
-        // 全量布局仅需重绘；长文档（ComputeSlim）滚动时需重新布局可见区域
+        // 全量布局仅需重绘；长文档（ComputeSlim）滚动时防抖后再重新布局可见区域
         ScrollOffsetProperty.Changed.AddClassHandler<EngineRenderControl>(
             (c, _) => c.OnScrollOffsetChanged()
         );
+        _scrollLayoutDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ScrollLayoutDebounceMs) };
+        _scrollLayoutDebounceTimer.Tick += OnScrollLayoutDebounceTick;
         AddHandler(PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel);
         AddHandler(PointerMovedEvent, OnPointerMoved, RoutingStrategies.Tunnel);
         AddHandler(PointerReleasedEvent, OnPointerReleased, RoutingStrategies.Tunnel);
@@ -162,12 +187,17 @@ public class EngineRenderControl : Control
 
     private RenderEngine? GetOrCreateEngine()
     {
+        if (IsDocumentEmpty(Document))
+            return null;
         if (_engine != null)
             return _engine;
         var config = EffectiveConfig;
         var w = (float)Math.Max(1, Bounds.Width - config.ContentPaddingX * 2);
-        _engine = new RenderEngine(w, config);
-        if (_engine.GetImageLoader() is DefaultImageLoader loader)
+        IImageLoader? imageLoader = string.IsNullOrEmpty(_documentBasePath)
+            ? null
+            : new BasePathImageLoader(_documentBasePath);
+        _engine = new RenderEngine(w, config, imageLoader);
+        if (_engine.GetImageLoader() is { } loader)
             loader.ImageLoaded += () =>
                 Dispatcher.UIThread.Post(() =>
                 {
@@ -187,13 +217,25 @@ public class EngineRenderControl : Control
     public void RequestParseAndLayout(int? lineStart, int? lineEnd) =>
         TriggerParseAndLayout(lineStart, lineEnd);
 
+    /// <summary>文档无实质内容（0 行或仅 1 行且为空）时不创建渲染引擎，降低空文档内存。</summary>
+    private static bool IsDocumentEmpty(IDocumentSource? doc)
+    {
+        if (doc == null) return true;
+        if (doc.LineCount == 0) return true;
+        if (doc.LineCount == 1) return doc.GetLine(0).Trim().IsEmpty;
+        return false;
+    }
+
     /// <summary>触发后台解析+布局任务，完成后在 UI 线程应用快照并刷新。</summary>
     private void TriggerParseAndLayout(int? lineStart, int? lineEnd)
     {
         var doc = Document;
         if (doc == null)
+            return;
+        if (IsDocumentEmpty(doc))
         {
-            Debug.WriteLine($"[Layout] TriggerParseAndLayout SKIP: doc=null");
+            _engine = null;
+            InvalidateVisual();
             return;
         }
 
@@ -208,6 +250,7 @@ public class EngineRenderControl : Control
         // 必须用视口高度，不能用 Bounds.Height（作为 ScrollViewer 内容时 Bounds.Height=文档总高）
         var viewportH = ViewportHeight > 0 ? ViewportHeight : 800f;
 
+        bool useIncrementalLayout;
         BlockListSnapshot blockSnapshot;
         if (
             lineStart.HasValue
@@ -218,16 +261,12 @@ public class EngineRenderControl : Control
         )
         {
             blockSnapshot = _parseManager.ReparseRange(doc, lineStart.Value, lineEnd.Value);
-            Debug.WriteLine(
-                $"[Layout] TriggerParseAndLayout ReparseRange lineStart={lineStart} lineEnd={lineEnd} blocks={blockSnapshot.Count}"
-            );
+            useIncrementalLayout = true;
         }
         else
         {
             blockSnapshot = _parseManager.ReparseFull(doc);
-            Debug.WriteLine(
-                $"[Layout] TriggerParseAndLayout ReparseFull blocks={blockSnapshot.Count} (lineStart={lineStart} lineEnd={lineEnd})"
-            );
+            useIncrementalLayout = false;
         }
 
         // 在清空引擎前保存上一帧 cum，供 ComputeSlim 复用以保持布局一致性（ComputeSlim 会校验长度）
@@ -235,9 +274,9 @@ public class EngineRenderControl : Control
         engine.ApplyBlocksSnapshot(blockSnapshot, doc);
 
         _isLayoutPending = true;
-        // 块数 > 500 时使用 ComputeSlim（仅布局可见区域），否则全量布局
-        float? scrollYArg = viewportH > 0 ? scrollY : null;
-        float? viewportArg = viewportH > 0 ? viewportH : null;
+        // 全量解析（如文档切换）时用 ComputeFull 整篇布局，避免 ComputeSlim 用旧 scrollY 只布局首屏导致下面空白
+        float? scrollYArg = (useIncrementalLayout && viewportH > 0) ? scrollY : null;
+        float? viewportArg = (useIncrementalLayout && viewportH > 0) ? viewportH : null;
         _layoutScheduler.EnqueueLayoutFromBlocks(
             blockSnapshot,
             w,
@@ -254,31 +293,22 @@ public class EngineRenderControl : Control
                     {
                         var curVer = _layoutScheduler.CurrentVersion;
                         if (version != curVer)
-                        {
-                            Debug.WriteLine(
-                                $"[Layout] ApplyLayoutSnapshot SKIP: version={version} != CurrentVersion={curVer} (过时结果已忽略)"
-                            );
                             return;
-                        }
                         var targetEngine = GetOrCreateEngine();
                         if (targetEngine != null)
                         {
                             targetEngine.ApplyBlocksSnapshot(blockSnapshot, doc);
                             targetEngine.ApplyLayoutSnapshot(snapshot);
-                            Debug.WriteLine(
-                                $"[Layout] ApplyLayoutSnapshot OK: version={version} blocks={snapshot.Blocks.Count} totalH={snapshot.TotalHeight:F0}"
-                            );
                         }
                         _isLayoutPending = false;
-                        _lastLayoutAppliedAt = DateTime.UtcNow;
+                        _suppressScrollLayoutAfterApply = true;
                         ToolTip.SetTip(this, null);
                         InvalidateMeasure();
                         InvalidateVisual();
                         LayoutApplied?.Invoke();
                     }
-                    catch (Exception ex)
+                    catch
                     {
-                        Debug.WriteLine($"[Layout] ApplyLayoutSnapshot EXCEPTION: {ex.Message}");
                         _isLayoutPending = false;
                     }
                 });
@@ -286,6 +316,7 @@ public class EngineRenderControl : Control
         );
     }
 
+    /// <summary>滚动偏移变化时立即重绘；布局则防抖，停止滚动约 ScrollLayoutDebounceMs 后再触发，避免实时布局卡顿。</summary>
     private void OnScrollOffsetChanged()
     {
         InvalidateVisual();
@@ -294,31 +325,88 @@ public class EngineRenderControl : Control
             _suppressNextScrollLayout = false;
             return;
         }
-        // 布局刚刚完成的一小段时间内不立即触发新的布局，避免“布局完成 → extent 变化 → ScrollChanged → 再次布局”的级联。
-        if ((DateTime.UtcNow - _lastLayoutAppliedAt).TotalMilliseconds < 200)
+        if (_suppressScrollLayoutAfterApply)
+        {
+            _suppressScrollLayoutAfterApply = false;
             return;
-        _scrollLayoutDebounce ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
-        _scrollLayoutDebounce.Stop();
-        _scrollLayoutDebounce.Tick -= OnScrollLayoutDebounceTick;
-        _scrollLayoutDebounce.Tick += OnScrollLayoutDebounceTick;
-        _scrollLayoutDebounce.Start();
+        }
+        _scrollLayoutDebounceTimer?.Stop();
+        _scrollLayoutDebounceTimer?.Start();
     }
 
     private void OnScrollLayoutDebounceTick(object? sender, EventArgs e)
     {
+        _scrollLayoutDebounceTimer?.Stop();
         try
         {
-            var t = _scrollLayoutDebounce;
-            if (t != null)
-            {
-                t.Stop();
-                t.Tick -= OnScrollLayoutDebounceTick;
-            }
-
             ClearPendingScrollRestore?.Invoke();
+            if (TriggerLayoutOnlyIfCached())
+                return;
             TriggerParseAndLayout(null, null);
         }
         catch { }
+    }
+
+    /// <summary>若已有解析缓存则仅触发布局（复用 blocks，传当前 scrollY 走 ComputeSlim），不阻塞 UI；返回 true 表示已提交布局任务。</summary>
+    private bool TriggerLayoutOnlyIfCached()
+    {
+        var doc = Document;
+        if (doc == null)
+            return false;
+        var blockSnapshot = _parseManager.GetCurrentSnapshot();
+        if (blockSnapshot == null)
+            return false;
+
+        var engine = GetOrCreateEngine();
+        if (engine == null)
+            return false;
+        var config = EffectiveConfig;
+        var w = (float)
+            Math.Max(1, (Bounds.Width > 0 ? Bounds.Width : 400) - config.ContentPaddingX * 2);
+        engine.SetWidth(w);
+        var scrollY = ScrollOffset;
+        var viewportH = ViewportHeight > 0 ? ViewportHeight : 800f;
+        float[]? previousCum = engine.GetCumulativeYSnapshot();
+
+        _isLayoutPending = true;
+        _layoutScheduler.EnqueueLayoutFromBlocks(
+            blockSnapshot,
+            w,
+            scrollY,
+            viewportH,
+            engine.GetLayoutEngine(),
+            engine.GetConfig(),
+            previousCum,
+            (snapshot, version) =>
+            {
+                Dispatcher.UIThread.Post(
+                    () =>
+                    {
+                        try
+                        {
+                            var curVer = _layoutScheduler.CurrentVersion;
+                            if (version != curVer)
+                                return;
+                            var targetEngine = GetOrCreateEngine();
+                            if (targetEngine != null)
+                            {
+                                targetEngine.ApplyBlocksSnapshot(blockSnapshot, doc);
+                                targetEngine.ApplyLayoutSnapshot(snapshot);
+                            }
+                            _isLayoutPending = false;
+                            _suppressScrollLayoutAfterApply = true;
+                            ToolTip.SetTip(this, null);
+                            InvalidateMeasure();
+                            InvalidateVisual();
+                            LayoutApplied?.Invoke();
+                        }
+                        catch
+                        {
+                            _isLayoutPending = false;
+                        }
+                    });
+            });
+        return true;
     }
 
     /// <summary>与渲染时一致的滚动值（裁剪到有效范围），用于命中测试与光标对齐。</summary>
@@ -440,7 +528,8 @@ public class EngineRenderControl : Control
                     }
                     else
                     {
-                        Core.OpenUrlService.Open(url);
+                        // 链接与图片统一由此处理：判定本地路径或 URL，本地用系统/本程序打开，http 用浏览器
+                        TryOpenLink(url);
                     }
                     e.Handled = true;
                     return;
@@ -493,6 +582,63 @@ public class EngineRenderControl : Control
         return -1;
     }
 
+    private static readonly HashSet<string> DocExtensions = new(StringComparer.OrdinalIgnoreCase) { ".md", ".txt" };
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+        { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg" };
+
+    /// <summary>解析链接：本地路径（相对当前文档或绝对）则打开文件；否则用浏览器打开。</summary>
+    private void TryOpenLink(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return;
+        if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            Core.OpenUrlService.Open(url);
+            return;
+        }
+        string? resolved = null;
+        if (DataContext is MainViewModel vm && !string.IsNullOrEmpty(vm.CurrentFilePath))
+        {
+            var baseDir = Path.GetDirectoryName(vm.CurrentFilePath) ?? "";
+            var normalized = url.Replace('/', Path.DirectorySeparatorChar);
+            resolved = Path.IsPathRooted(normalized) ? Path.GetFullPath(normalized) : Path.GetFullPath(Path.Combine(baseDir, normalized));
+        }
+        else if (Path.IsPathRooted(url))
+        {
+            resolved = Path.GetFullPath(url.Replace('/', Path.DirectorySeparatorChar));
+        }
+        if (resolved != null && File.Exists(resolved))
+        {
+            var ext = Path.GetExtension(resolved);
+            if (DocExtensions.Contains(ext))
+            {
+                if (DataContext is MainViewModel m)
+                    m.OpenDocument(resolved);
+                return;
+            }
+            if (ImageExtensions.Contains(ext))
+            {
+                if (DataContext is MainViewModel m)
+                    m.OpenImageInTab(resolved);
+                else
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo { FileName = resolved, UseShellExecute = true });
+                    }
+                    catch { }
+                }
+                return;
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo { FileName = resolved, UseShellExecute = true });
+            }
+            catch { }
+            return;
+        }
+        Core.OpenUrlService.Open(url);
+    }
+
     private void OnPointerMoved(object? sender, PointerEventArgs e)
     {
         var pt = e.GetPosition(this);
@@ -530,22 +676,15 @@ public class EngineRenderControl : Control
                 }
                 _selection = new SelectionRange(startBlock, startOff, endBlock, endOff);
                 e.Handled = true;
-                var now = DateTime.UtcNow;
-                if ((now - _lastSelectionInvalidate).TotalMilliseconds >= 32)
-                {
-                    _lastSelectionInvalidate = now;
-                    InvalidateVisual();
-                }
-                else if (!_selectionInvalidateScheduled)
+                if (!_selectionInvalidateScheduled)
                 {
                     _selectionInvalidateScheduled = true;
-                    Avalonia.Threading.Dispatcher.UIThread.Post(
+                    Dispatcher.UIThread.Post(
                         () =>
                         {
                             try
                             {
                                 _selectionInvalidateScheduled = false;
-                                _lastSelectionInvalidate = DateTime.UtcNow;
                                 InvalidateVisual();
                             }
                             catch
@@ -553,8 +692,7 @@ public class EngineRenderControl : Control
                                 _selectionInvalidateScheduled = false;
                             }
                         },
-                        Avalonia.Threading.DispatcherPriority.Background
-                    );
+                        DispatcherPriority.Background);
                 }
             }
         }
@@ -656,31 +794,30 @@ public class EngineRenderControl : Control
 
         // 仅当宽度变化时重置引擎；高度变化通常由内容布局完成触发，若此时重置会导致闪烁循环
         double newW = e.NewSize.Width;
-        double newH = e.NewSize.Height;
         bool widthChanged =
             _lastSizeChangedWidth >= 0 && Math.Abs(newW - _lastSizeChangedWidth) > 1;
-        double prevW = _lastSizeChangedWidth;
         _lastSizeChangedWidth = newW;
 
-        Debug.WriteLine(
-            $"[Layout] OnSizeChanged: ({prevW:F0},{e.PreviousSize.Height:F0}) -> ({newW:F0},{newH:F0}) widthChanged={widthChanged}"
-        );
-
-        if (widthChanged)
+        if (widthChanged && Document != null)
         {
-            Debug.WriteLine($"[Layout] OnSizeChanged -> ResetEngine + RequestParseAndLayout");
-            ResetEngine();
+            // 仅宽度变化时只重算布局（复用已有解析），不重置引擎、不全量解析，避免超长文档卡顿
             InvalidateMeasure();
-            if (Document != null)
-                RequestParseAndLayout();
+            if (TriggerLayoutOnlyIfCached())
+                return;
+            ResetEngine();
+            RequestParseAndLayout();
         }
     }
 
     protected override Size MeasureOverride(Size availableSize)
     {
         var doc = Document;
-        if (doc == null)
-            return ClampMeasureSize(availableSize.Width, 100);
+        if (doc == null || IsDocumentEmpty(doc))
+        {
+            double minH = ViewportHeight > 0 ? (double)ViewportHeight : 100;
+            double emptyW = double.IsFinite(availableSize.Width) && availableSize.Width > 0 ? availableSize.Width : (Bounds.Width > 0 ? Bounds.Width : 400);
+            return ClampMeasureSize(emptyW, Math.Max(100, minH));
+        }
 
         // 一次性算准宽度：无效或零时用当前 Bounds 或上次有效值，避免变窄后复原的闪烁
         double availW =
@@ -694,12 +831,22 @@ public class EngineRenderControl : Control
         if (engine == null)
             return ClampMeasureSize(availW, 100);
         var w = (float)Math.Max(1, availW - EffectiveConfig.ContentPaddingX * 2);
-        engine.SetWidth(w);
+        var cfg = EffectiveConfig;
+        float hBefore = engine.MeasureTotalHeight(doc);
+        bool widthUnchanged = Math.Abs(w - engine.GetWidth()) <= WidthTolerance;
+        bool hasLayout = hBefore > cfg.ExtraBottomPadding + LayoutHeightThreshold;
+        if (!hasLayout || widthUnchanged)
+            engine.SetWidth(w);
         float h = engine.MeasureTotalHeight(doc);
+        if (h <= cfg.ExtraBottomPadding + LayoutHeightThreshold && hasLayout)
+            h = hBefore;
         float contentWidth = engine.MeasureContentWidth(doc);
         float totalWidth = EffectiveConfig.ContentPaddingX * 2 + contentWidth;
         double width = Math.Max(availW, (double)totalWidth);
         double height = Math.Max(100, (double)h);
+        // 内容较少时至少占满视口高度，避免预览区下方露出 ScrollViewer 默认黑色
+        if (ViewportHeight > 0 && height < (double)ViewportHeight)
+            height = (double)ViewportHeight;
         return ClampMeasureSize(width, height);
     }
 
@@ -713,16 +860,39 @@ public class EngineRenderControl : Control
         return new Size(width, height);
     }
 
+    private void DrawBackgroundOnly(DrawingContext context, Rect bounds)
+    {
+        var bg = EffectiveConfig.PageBackground;
+        var color = Color.FromArgb(
+            (byte)(bg >> 24),
+            (byte)(bg >> 16),
+            (byte)(bg >> 8),
+            (byte)bg
+        );
+        context.FillRectangle(new SolidColorBrush(color), new Rect(0, 0, bounds.Width, bounds.Height));
+    }
+
     public override void Render(DrawingContext context)
     {
         base.Render(context);
-        var doc = Document;
-        if (doc == null)
-            return;
-
         var bounds = Bounds;
         if (bounds.Width <= 0 || bounds.Height <= 0)
             return;
+
+        var doc = Document;
+        if (doc == null)
+        {
+            // 无文档时只绘制主题背景，避免预览区露出黑色
+            DrawBackgroundOnly(context, bounds);
+            return;
+        }
+        if (IsDocumentEmpty(doc))
+        {
+            // 无实质内容时不创建渲染引擎，仅绘制背景，降低空文档内存（约数十 MB）
+            _engine = null;
+            DrawBackgroundOnly(context, bounds);
+            return;
+        }
 
         var rawScrollY = ScrollOffset;
         var config = EffectiveConfig;
@@ -731,7 +901,12 @@ public class EngineRenderControl : Control
         if (_engine == null)
             _engine = new RenderEngine(w, config);
         else
-            _engine.SetWidth(w);
+        {
+            bool widthUnchanged = Math.Abs(w - _engine.GetWidth()) <= WidthTolerance;
+            bool hasLayout = _engine.MeasureTotalHeight(doc) > config.ExtraBottomPadding + LayoutHeightThreshold;
+            if (!hasLayout || widthUnchanged)
+                _engine.SetWidth(w);
+        }
 
         var viewportHeight = (float)bounds.Height;
         var totalHeight = _engine.MeasureTotalHeight(doc);
@@ -758,7 +933,7 @@ public class EngineRenderControl : Control
         );
     }
 
-    private sealed class EngineDrawOp : ICustomDrawOperation
+        private sealed class EngineDrawOp : ICustomDrawOperation
     {
         private readonly Rect _rect;
         private readonly IDocumentSource _doc;
@@ -824,6 +999,13 @@ public class EngineRenderControl : Control
                 Size = new SKSize(_width, _height),
                 Scale = 1f
             };
+
+            // 先用渲染引擎配置中的整页背景色清屏，使预览区域底色来自 Markdown 配置而非界面主题。
+            var cfg = _engine.GetConfig();
+            var bg = cfg.PageBackground;
+            var bgColor = new SKColor((byte)(bg >> 16), (byte)(bg >> 8), (byte)bg, (byte)(bg >> 24));
+            canvas.Clear(bgColor);
+
             canvas.Save();
             canvas.Translate(_contentPaddingX, _contentPaddingY);
             _engine.Render(

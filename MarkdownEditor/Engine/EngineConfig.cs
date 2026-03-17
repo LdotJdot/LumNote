@@ -69,7 +69,10 @@ public sealed class EngineConfig
     /// <summary>定义列表术语与定义的缩进差。</summary>
     public float DefinitionListIndent { get; set; } = 24f;
 
+    /// <summary>正文文本颜色。</summary>
     public uint TextColor { get; set; } = 0xFFD4D4D4;
+    /// <summary>整页背景色（Markdown 渲染区域底色）。</summary>
+    public uint PageBackground { get; set; } = 0xFF1E1E1E;
     public uint TableBorderColor { get; set; } = 0xFFD0D7DE;
     public uint TableHeaderBackground { get; set; } = 0xFFF6F8FA;
 
@@ -113,6 +116,7 @@ public sealed class EngineConfig
             FootnoteTopMargin = FootnoteTopMargin * z,
             DefinitionListIndent = DefinitionListIndent * z,
             TextColor = TextColor,
+            PageBackground = PageBackground,
             TableBorderColor = TableBorderColor,
             TableHeaderBackground = TableHeaderBackground,
             CodeBackground = CodeBackground,
@@ -140,6 +144,7 @@ public sealed class EngineConfig
             TextColor = Core.ColorUtils.ParseHexColor(style.TextColor),
             TableBorderColor = Core.ColorUtils.ParseHexColor(style.TableBorderColor),
             TableHeaderBackground = Core.ColorUtils.ParseHexColor(style.TableHeaderBackground),
+            PageBackground = Core.ColorUtils.ParseHexColor(style.BackgroundColor),
             CodeBackground = Core.ColorUtils.ParseHexColor(style.CodeBlockBackground),
             CodeKeywordColor = Core.ColorUtils.ParseHexColor(style.CodeKeywordColor),
             CodeStringColor = Core.ColorUtils.ParseHexColor(style.CodeStringColor),

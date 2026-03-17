@@ -29,7 +29,7 @@ public sealed class LongImageExporter : IMarkdownExporter
             var width = options?.PageWidthPx ?? (int)DefaultWidth;
             if (width < 100) width = (int)DefaultWidth;
 
-            var config = EngineConfig.FromStyle(null);
+            var config = EngineConfig.FromStyle(options?.StyleConfig) ?? new EngineConfig();
             var imageLoader = new BasePathImageLoader(documentBasePath ?? "");
             var doc = new StringDocumentSource(markdown ?? "");
             var engine = new RenderEngine(width, config, imageLoader);
@@ -46,7 +46,13 @@ public sealed class LongImageExporter : IMarkdownExporter
                 return Task.FromResult(new ExportResult(false, "无法创建绘图表面。"));
 
             var canvas = surface.Canvas;
-            canvas.Clear(new SKColor(0x1e, 0x1e, 0x1e));
+            // 使用页面背景色清空画布，与预览区一致；若用 TextColor 会导致文字与背景同色不可见
+            var bg = config.PageBackground;
+            canvas.Clear(new SKColor(
+                (byte)((bg >> 16) & 0xFF),
+                (byte)((bg >> 8) & 0xFF),
+                (byte)(bg & 0xFF),
+                (byte)((bg >> 24) & 0xFF)));
 
             var ctx = new ExportSkiaRenderContext
             {

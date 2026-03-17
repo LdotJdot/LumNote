@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
@@ -48,7 +47,6 @@ public partial class MarkdownEngineView : UserControl
 
     private string? _lastMarkdown;
     private DispatcherTimer? _debounce;
-    private DispatcherTimer? _scrollThrottle;
     private MarkdownEditor.Engine.Document.MutableStringDocumentSource? _documentSource;
 
     /// <summary>布局应用后待恢复的滚动比例 [0,1]，null 表示不恢复。</summary>
@@ -102,29 +100,36 @@ public partial class MarkdownEngineView : UserControl
             (c, _) =>
             {
                 if (c.RenderControl != null)
+                {
                     c.RenderControl.StyleConfig = c.StyleConfig;
+                    // 主题/样式发生变化时，重建引擎并重新布局，以便立即刷新背景与文本样式。
+                    c.RenderControl.ResetEngine();
+                    if (c.Markdown != null)
+                    {
+                        c.RenderControl.RequestParseAndLayout();
+                    }
+                    else
+                    {
+                        c.RenderControl.InvalidateVisual();
+                    }
+                }
             }
         );
 
         ZoomLevelProperty.Changed.AddClassHandler<MarkdownEngineView>(
-            (c, _) => c.RenderControl?.ResetEngine()
+            (c, _) =>
+            {
+                if (c.RenderControl == null) return;
+                c.RenderControl.ResetEngine();
+                if (c.Markdown != null)
+                    c.RenderControl.RequestParseAndLayout();
+                else
+                    c.RenderControl.InvalidateVisual();
+            }
         );
 
         if (Scroll != null)
         {
-            _scrollThrottle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(32) };
-            _scrollThrottle.Tick += (_, _) =>
-            {
-                try
-                {
-                    _scrollThrottle?.Stop();
-                    RenderControl?.InvalidateVisual();
-                }
-                catch
-                {
-                    _scrollThrottle?.Stop();
-                }
-            };
             Scroll.ScrollChanged += (_, _) =>
             {
                 if (RenderControl == null || Scroll == null)
@@ -133,8 +138,6 @@ public partial class MarkdownEngineView : UserControl
                 var maxY = Math.Max(0, Scroll.Extent.Height - Scroll.Viewport.Height);
                 if (maxY > 0 && DataContext is ViewModels.MainViewModel vm)
                     vm.CurrentPreviewScrollRatio = Math.Clamp(Scroll.Offset.Y / maxY, 0, 1);
-                _scrollThrottle?.Stop();
-                _scrollThrottle?.Start();
             };
         }
 
@@ -158,6 +161,7 @@ public partial class MarkdownEngineView : UserControl
         if (RenderControl != null)
         {
             RenderControl.StyleConfig = StyleConfig;
+            RenderControl.DocumentBasePath = (DataContext is MainViewModel vm) ? (vm.DocumentBasePath ?? "") : "";
             RenderControl.LayoutApplied -= OnRenderControlLayoutApplied;
             RenderControl.LayoutApplied += OnRenderControlLayoutApplied;
             RenderControl.ClearPendingScrollRestore = () => _pendingScrollRatio = null;
@@ -311,10 +315,11 @@ public partial class MarkdownEngineView : UserControl
             _documentSource.SetText(md);
 
         RenderControl.Document = _documentSource;
-        Debug.WriteLine(
-            $"[Layout] MarkdownEngineView.UpdateDocument -> RequestParseAndLayout(lineStart={lineStart}, lineEnd={lineEnd})"
-        );
-        RenderControl.RequestParseAndLayout(lineStart, lineEnd);
+        RenderControl.DocumentBasePath = (DataContext is ViewModels.MainViewModel m) ? (m.DocumentBasePath ?? "") : "";
+        // 整篇替换（如快速切换文档）时强制全量解析，避免 ReparseRange 基于旧文档块合并导致只渲染一部分
+        int newLineCount = string.IsNullOrEmpty(md) ? 0 : md.Split('\n').Length;
+        bool forceFullParse = lineStart.HasValue && lineEnd.HasValue && lineStart.Value == 0 && lineEnd.Value >= newLineCount;
+        RenderControl.RequestParseAndLayout(forceFullParse ? null : lineStart, forceFullParse ? null : lineEnd);
         ClearSkipEditorToPreviewScrollSync();
     }
 
@@ -323,7 +328,6 @@ public partial class MarkdownEngineView : UserControl
         try
         {
             _debounce?.Stop();
-            _scrollThrottle?.Stop();
             if (RenderControl != null)
             {
                 RenderControl.LayoutApplied -= OnRenderControlLayoutApplied;
@@ -338,4 +342,5 @@ public partial class MarkdownEngineView : UserControl
     public System.Threading.Tasks.Task<bool> TryCopySelectionAsync() =>
         RenderControl?.TryCopySelectionToClipboardAsync()
         ?? System.Threading.Tasks.Task.FromResult(false);
+
 }

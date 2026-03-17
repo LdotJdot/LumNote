@@ -3,7 +3,7 @@ using SkiaSharp;
 
 namespace MarkdownEditor.Latex;
 
-internal static partial class MathSkiaRenderer
+public static partial class MathSkiaRenderer
 {
     /// <summary>
     /// 根号盒子：完全用几何路径绘制“脚 + 斜线 + 横线”，不再依赖字体中的 √ glyph，

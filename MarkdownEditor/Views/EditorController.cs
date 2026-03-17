@@ -19,7 +19,7 @@ internal sealed class EditorController
     private readonly TextEditor _editor;
     private readonly MainViewModel _viewModel;
     private readonly MarkdownHighlightingService _highlightService;
-    private readonly MarkdownColorizer _colorizer;
+    private MarkdownColorizer _colorizer;
     private readonly DispatcherTimer _highlightTimer;
     private SearchPanel? _searchPanel;
     private int _highlightVersion;
@@ -38,9 +38,8 @@ internal sealed class EditorController
     /// <summary>用于 Alt+Left/Right 的光标位置历史：上一次光标偏移。</summary>
     private int _lastCaretOffsetForHistory = -1;
 
-    /// <summary>最近一次已压入后退栈的偏移与时间，避免过于频繁地记录。</summary>
+    /// <summary>最近一次已压入后退栈的偏移，避免对相邻位置重复记录。</summary>
     private int _lastHistoryPushedOffset = -1;
-    private DateTime _lastHistoryPushedAt = DateTime.MinValue;
 
     /// <summary>下一次光标位置变化是否跳过历史记录（用于程序化导航，例如 Alt+Back/Forward、搜索结果跳转等）。</summary>
     private bool _suppressNextHistoryRecord;
@@ -67,6 +66,17 @@ internal sealed class EditorController
         };
 
         SetupEditorHighlighting();
+    }
+
+    /// <summary>切换编辑器语法高亮主题（深色/浅色）。</summary>
+    public void SetHighlightTheme(MarkdownHighlightTheme theme)
+    {
+        _editor.TextArea.TextView.LineTransformers.Remove(_colorizer);
+        _colorizer = new MarkdownColorizer(theme);
+        _editor.TextArea.TextView.LineTransformers.Add(_colorizer);
+        _forceRehighlightWindow = true;
+        _highlightedWindowStart = _highlightedWindowEnd = -1;
+        UpdateEditorHighlight();
     }
 
     /// <summary>请求在下一次 VM→Editor 同步时跳转到指定行（用于搜索结果导航后等待文档加载完成）。</summary>
@@ -119,7 +129,6 @@ internal sealed class EditorController
             _viewModel.ActiveDocument.LastCaretOffset = _editor.TextArea.Caret.Offset;
         _lastCaretOffsetForHistory = _editor.TextArea.Caret.Offset;
         _lastHistoryPushedOffset = -1;
-        _lastHistoryPushedAt = DateTime.MinValue;
         _suppressNextHistoryRecord = false;
 
         _viewModel.PropertyChanged += (_, e) =>
@@ -143,11 +152,10 @@ internal sealed class EditorController
                     // 文本/文档切换后重置光标历史起点，避免旧文档位置影响后续“大跳转”判断。
                     _lastCaretOffsetForHistory = _editor.TextArea.Caret.Offset;
                     _lastHistoryPushedOffset = -1;
-                    _lastHistoryPushedAt = DateTime.MinValue;
 
-                    if (_pendingGoToLine > 0 && _editor.Document != null)
+                    if (_pendingGoToLine > 0 && _editor.Document != null && _editor.Document.LineCount >= _pendingGoToLine)
                     {
-                        // 搜索结果等触发的“跳转到行”属于程序化导航，本次光标变化不应记录到历史。
+                        // 仅当文档已加载足够行时再跳转，避免异步读盘时内容未到导致跳转失效。
                         _suppressNextHistoryRecord = true;
                         var lineNum = Math.Clamp(_pendingGoToLine, 1, _editor.Document.LineCount);
                         var line = _editor.Document.GetLineByNumber(lineNum);
@@ -208,13 +216,15 @@ internal sealed class EditorController
                         var lastLine = doc.GetLineByOffset(_lastCaretOffsetForHistory).LineNumber;
                         var lineDelta = Math.Abs(currentLine - lastLine);
                         var offsetDelta = Math.Abs(caretOffset - _lastCaretOffsetForHistory);
-                        var now = DateTime.UtcNow;
-
-                        // 仅在“明显跳转”时记录历史：行号变化较大（至少 5 行）或偏移距离较大，且与上次记录有一定时间间隔。
+                        // 仅在“明显跳转”时记录历史：行号或偏移变化足够大，且与上次记录位置相距足够远，避免相邻位置重复压栈。
+                        const int minDistanceFromLastPushed = 40;
+                        bool farEnoughFromLast =
+                            _lastHistoryPushedOffset < 0
+                            || Math.Abs(_lastCaretOffsetForHistory - _lastHistoryPushedOffset) >= minDistanceFromLastPushed;
                         if (
                             (lineDelta >= 5 || offsetDelta >= 40)
                             && _lastHistoryPushedOffset != _lastCaretOffsetForHistory
-                            && now - _lastHistoryPushedAt > TimeSpan.FromMilliseconds(400)
+                            && farEnoughFromLast
                         )
                         {
                             _viewModel.RecordLocation(
@@ -222,7 +232,6 @@ internal sealed class EditorController
                                 _lastCaretOffsetForHistory
                             );
                             _lastHistoryPushedOffset = _lastCaretOffsetForHistory;
-                            _lastHistoryPushedAt = now;
                         }
                     }
                     catch
@@ -237,61 +246,19 @@ internal sealed class EditorController
     }
 
     /// <summary>
-    /// 在不破坏运行时兼容性的前提下，尽量启用 AvaloniaEdit 的矩形选择功能。
-    /// 该方法集中承载对内部属性的反射访问，便于未来在 AvaloniaEdit 暴露正式 API 时一处替换。
+    /// 启用 AvaloniaEdit 的矩形选择（Alt+拖拽列选）。
     /// </summary>
     private static void TryEnableRectangularSelection(TextEditor editor)
     {
-        if (editor == null)
+        if (editor?.Options == null)
             return;
-
-        var options = editor.Options;
-
-        // 1) 若未来版本在公开 API 上提供 EnableRectangularSelection，则优先使用。
-        //    这里通过 C# 模式匹配 +反射名称双保险，避免直接引用内部类型。
         try
         {
-            var publicProp = options
-                .GetType()
-                .GetProperty(
-                    "EnableRectangularSelection",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
-                );
-            if (
-                publicProp != null && publicProp.CanWrite && publicProp.PropertyType == typeof(bool)
-            )
-            {
-                publicProp.SetValue(options, true);
-                return;
-            }
+            editor.Options.EnableRectangularSelection = true;
         }
         catch
         {
-            // 公共 API 访问失败时继续尝试内部属性，不影响后续逻辑。
-        }
-
-        // 2) 兼容老版本：回退到内部属性反射，但将影响面限定在本方法内部。
-        try
-        {
-            var internalProp = options
-                .GetType()
-                .GetProperty(
-                    "EnableRectangularSelection",
-                    System.Reflection.BindingFlags.Instance
-                        | System.Reflection.BindingFlags.NonPublic
-                );
-            if (
-                internalProp != null
-                && internalProp.CanWrite
-                && internalProp.PropertyType == typeof(bool)
-            )
-            {
-                internalProp.SetValue(options, true);
-            }
-        }
-        catch
-        {
-            // 矩形选择不是核心功能，失败时静默忽略，避免在某些发行版上因内部实现变化导致编辑器不可用。
+            // 矩形选择非核心功能，个别版本若无此属性则静默忽略。
         }
     }
 

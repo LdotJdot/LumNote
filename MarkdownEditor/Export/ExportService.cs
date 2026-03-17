@@ -74,11 +74,12 @@ public sealed class ExportService
             return (false, "无法获取保存路径。");
         }
 
+        var exportOptions = new ExportOptions(StyleConfig: vm.Config.Markdown);
         var result = await exporter.ExportAsync(
             vm.CurrentMarkdown ?? "",
             vm.DocumentBasePath ?? "",
             outputPath,
-            null,
+            exportOptions,
             ct);
 
         if (result.Success)

@@ -9,6 +9,7 @@ namespace MarkdownEditor.ViewModels;
 /// </summary>
 public sealed class FileTreeNode : ViewModelBase
 {
+    /// <summary>文件夹是否展开。工作区多根时根节点新建后设为 false，子文件夹默认 true。</summary>
     private bool _isExpanded = true;
     private bool _isRenaming;
     private string _editName = "";
@@ -44,8 +45,13 @@ public sealed class FileTreeNode : ViewModelBase
     /// <summary>是否显示向下箭头（展开状态）。</summary>
     public bool ShowDownArrow => IsFolder && IsExpanded;
 
-    /// <summary>节点图标列内容：文件为 📄，文件夹为空但保留固定宽度。</summary>
-    public string IconText => IsFolder ? "" : "📄";
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"
+    };
+
+    /// <summary>节点图标列内容：图片为 🖼️，其他文件为 📄，文件夹为空但保留固定宽度。</summary>
+    public string IconText => IsFolder ? "" : (ImageExtensions.Contains(System.IO.Path.GetExtension(FullPath)) ? "🖼️" : "📄");
 
     /// <summary>是否处于就地重命名状态（显示 TextBox 代替名称）。</summary>
     public bool IsRenaming

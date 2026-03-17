@@ -42,14 +42,14 @@ public sealed class BlockPaintContext
         DrawBlockBackground = drawBlockBackground;
     }
 
-    /// <summary>绘制块内所有行与 Run，以及选区高亮（统一内容绘制入口，各 BlockPainter 在绘制完背景后调用）。</summary>
+    /// <summary>绘制块内所有行与 Run，以及选区高亮（统一内容绘制入口，各 BlockPainter 在绘制完背景后调用）。先画选区再画文字，避免选区矩形盖住文字。</summary>
     public void DrawBlockContent()
     {
         foreach (var line in Block.Lines)
         {
+            DrawSelectionForLine(line);
             foreach (var run in line.Runs)
                 DrawRun(run);
-            DrawSelectionForLine(line);
         }
     }
 }

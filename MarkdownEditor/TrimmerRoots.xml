@@ -7,6 +7,7 @@
     <type fullname="MarkdownEditor.Core.AppConfig" preserve="all"/>
     <type fullname="MarkdownEditor.Core.UiConfig" preserve="all"/>
     <type fullname="MarkdownEditor.Core.MarkdownStyleConfig" preserve="all"/>
+    <type fullname="MarkdownEditor.Core.MarkdownStylePreset" preserve="all"/>
   </assembly>
   <assembly fullname="Avalonia.Themes.Fluent">
     <type fullname="*" preserve="all"/>

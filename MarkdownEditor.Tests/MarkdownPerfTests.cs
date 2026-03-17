@@ -4,6 +4,7 @@ using MarkdownEditor.Core;
 using MarkdownEditor.Latex;
 using MarkdownEditor.ViewModels;
 using Xunit;
+using SkiaSharp;
 
 namespace MarkdownEditor.Tests;
 
@@ -36,7 +37,7 @@ public class MarkdownPerfTests
     [Fact]
     public void MathSkiaRenderer_ShouldCacheParseResults()
     {
-        var body = SKTypefaceHelper.GetDefaultBodyTypeface();
+        var body = SKTypeface.Default;
         var math = body;
         const string latex = "x^2 + y^2";
 

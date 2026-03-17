@@ -2,12 +2,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:controls="clr-namespace:MarkdownEditor.Controls"
              x:Class="MarkdownEditor.Controls.MarkdownEngineView"
-             x:CompileBindings="True"
-             Background="#1e1e1e">
+             x:CompileBindings="True">
 
   <Grid>
     <ScrollViewer x:Name="Scroll"
-                  Background="#1e1e1e"
                   HorizontalScrollBarVisibility="Disabled"
                   VerticalScrollBarVisibility="Auto"
                   BringIntoViewOnFocusChange="False">

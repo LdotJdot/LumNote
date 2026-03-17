@@ -10,10 +10,13 @@ namespace MarkdownEditor.Latex;
 /// 使用 SkiaSharp 将 LaTeX 数学公式（通过 MathParser 解析后的 AST）绘制到画布上。
 /// 这是一个简化版的 TeX 布局引擎：支持顺序、上下标、分数、根号以及 eqnarray 多行环境。
 /// </summary>
-internal static partial class MathSkiaRenderer
+public static partial class MathSkiaRenderer
 {
     private static readonly object _parseCacheLock = new();
     private static readonly Dictionary<string, MathNode> _parseCache = new(StringComparer.Ordinal);
+    private static readonly List<string> _parseCacheOrder = new();
+    /// <summary>公式解析缓存条数上限，超出时 FIFO 淘汰，控制长期内存。</summary>
+    private const int MaxParseCacheEntries = 256;
 
     /// <summary>
     /// 将 LaTeX 源码做轻量归一化：
@@ -78,9 +81,16 @@ internal static partial class MathSkiaRenderer
         {
             if (_parseCache.TryGetValue(latex, out var cached))
                 return cached;
+            while (_parseCache.Count >= MaxParseCacheEntries && _parseCacheOrder.Count > 0)
+            {
+                var oldKey = _parseCacheOrder[0];
+                _parseCacheOrder.RemoveAt(0);
+                _parseCache.Remove(oldKey);
+            }
             var formula = MathParser.Parse(latex);
             var root = formula.Root;
             _parseCache[latex] = root;
+            _parseCacheOrder.Add(latex);
             return root;
         }
     }
@@ -90,13 +100,15 @@ internal static partial class MathSkiaRenderer
     /// bodyTypeface：用于 \text{} 等普通文本和 CJK 回退；
     /// mathTypeface：用于数学符号/运算符等（如 Latin Modern Math）。
     /// </summary>
+    /// <param name="textColor">公式文字与线条颜色，由引擎根据 Markdown 样式（深色/浅色）传入，避免浅色主题下公式不可见。</param>
     public static void DrawFormula(
         SKCanvas canvas,
         SKRect bounds,
         string latex,
         SKTypeface bodyTypeface,
         SKTypeface mathTypeface,
-        float baseFontSize
+        float baseFontSize,
+        SKColor textColor
     )
     {
         if (canvas == null || string.IsNullOrWhiteSpace(latex))
@@ -108,7 +120,7 @@ internal static partial class MathSkiaRenderer
 
         var root = GetOrParseRoot(normalized);
 
-        var ctx = new RenderContext(bodyTypeface, mathTypeface, baseFontSize);
+        var ctx = new RenderContext(bodyTypeface, mathTypeface, baseFontSize, textColor);
         // 块级数学统一按 Display 样式处理；后续可根据内联/块级具体区分
         var box = BuildBox(root, ctx, MathStyle.Display, 1.0f);
 
@@ -158,8 +170,8 @@ internal static partial class MathSkiaRenderer
             return (0, 0, 0);
 
         var root = GetOrParseRoot(normalized);
-
-        var ctx = new RenderContext(bodyTypeface, mathTypeface, baseFontSize);
+        // 测量不绘制，使用默认深色文字色即可
+        var ctx = new RenderContext(bodyTypeface, mathTypeface, baseFontSize, new SKColor(0xd4, 0xd4, 0xd4));
         var box = BuildBox(root, ctx, MathStyle.Display, 1.0f);
 
         return (box.Width, box.Height, box.Depth);
@@ -169,19 +181,18 @@ internal static partial class MathSkiaRenderer
 
     private sealed class RenderContext
     {
-        /// <summary>正文基准字体（通常来自编辑器配置，如 Microsoft YaHei UI）。</summary>
         public SKTypeface BodyTypeface { get; }
-
-        /// <summary>数学专用字体（Latin Modern Math / STIX Two Math / Cambria Math 等）。</summary>
         public SKTypeface MathTypeface { get; }
-
         public float BaseFontSize { get; }
+        /// <summary>公式文字与线条颜色，随 Markdown 样式（深色/浅色）变化。</summary>
+        public SKColor TextColor { get; }
 
-        public RenderContext(SKTypeface bodyTypeface, SKTypeface mathTypeface, float baseFontSize)
+        public RenderContext(SKTypeface bodyTypeface, SKTypeface mathTypeface, float baseFontSize, SKColor textColor)
         {
             BodyTypeface = bodyTypeface;
             MathTypeface = mathTypeface ?? bodyTypeface;
             BaseFontSize = baseFontSize;
+            TextColor = textColor;
         }
 
         /// <summary>
@@ -534,10 +545,12 @@ internal static partial class MathSkiaRenderer
         private readonly float _colGap;
         private readonly float _rowGap;
         private readonly HashSet<int> _verticalRuleBeforeColumn;
+        private readonly SKColor _color;
 
-        public EnvironmentBox(List<List<Box>> rows, float[] colWidths, float colGap, float rowGap, int[]? verticalRuleBeforeColumn = null)
+        public EnvironmentBox(List<List<Box>> rows, float[] colWidths, float colGap, float rowGap, int[]? verticalRuleBeforeColumn, SKColor lineColor)
         {
             _rows = rows;
+            _color = lineColor;
             _colWidths = colWidths;
             _colGap = colGap;
             _rowGap = rowGap;
@@ -574,7 +587,7 @@ internal static partial class MathSkiaRenderer
                 Style = SKPaintStyle.Stroke,
                 StrokeWidth = 1f,
                 IsAntialias = true,
-                Color = new SKColor(0xD4, 0xD4, 0xD4)
+                Color = _color
             };
 
             float matrixTop = baselineY - Height;
@@ -770,8 +783,7 @@ internal static partial class MathSkiaRenderer
         var textPaint = new SKPaint
         {
             IsAntialias = true,
-            // 默认前景色为浅灰，适配深色主题；具体颜色可在调用端根据主题配置覆盖。
-            Color = new SKColor(0xd4, 0xd4, 0xd4),
+            Color = ctx.TextColor,
             Style = SKPaintStyle.Fill
         };
 
@@ -845,7 +857,7 @@ internal static partial class MathSkiaRenderer
                 var gap = ctx.BaseFontSize * scale * 0.25f;
                 var linePaint = new SKPaint
                 {
-                    Color = new SKColor(0xd4, 0xd4, 0xd4),
+                    Color = ctx.TextColor,
                     StrokeWidth = ruleThickness,
                     IsAntialias = true
                 };
@@ -921,7 +933,7 @@ internal static partial class MathSkiaRenderer
                     }
                     verticalRuleBeforeColumn = list.ToArray();
                 }
-                var core = new EnvironmentBox(allRows, colWidths, colGap, rowGap, verticalRuleBeforeColumn);
+                var core = new EnvironmentBox(allRows, colWidths, colGap, rowGap, verticalRuleBeforeColumn, ctx.TextColor);
 
                 // 矩阵类环境：在左右加上括号/中括号/竖线
                 string? leftDelim = null,

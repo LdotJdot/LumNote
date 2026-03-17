@@ -627,7 +627,7 @@ public sealed class SkiaRenderer : ITextMeasurer
         var bodyTf = _bodyTypeface ??= ResolveBodyTypeface();
         var mathTf = GetMathTypeface();
         var mathFontSize = Math.Max(16, _baseFontSize * 1.15f);
-        MathSkiaRenderer.DrawFormula(canvas, run.Bounds, run.Text, bodyTf, mathTf, mathFontSize);
+        MathSkiaRenderer.DrawFormula(canvas, run.Bounds, run.Text, bodyTf, mathTf, mathFontSize, _textPaint.Color);
     }
 
     /// <inheritdoc />
@@ -706,20 +706,17 @@ public sealed class SkiaRenderer : ITextMeasurer
         }
     }
 
-    /// <summary>引用块：背景 + 左侧竖条；代码块/公式块不加竖线。</summary>
+    /// <summary>引用块：背景 + 左侧竖条；颜色来源于 Markdown 样式（代码块背景 + 引用边框色）。</summary>
     private void DrawBlockquoteStyle(SKCanvas canvas, LayoutBlock block)
     {
         const float barWidth = 4f;
         var r = block.Bounds;
-        using var bgPaint = new SKPaint
-        {
-            Color = new SKColor(0x2d, 0x2d, 0x30),
-            Style = SKPaintStyle.Fill
-        };
-        canvas.DrawRect(new SKRect(0, 0, r.Width, r.Height), bgPaint);
+        // 背景使用与代码块相同的浅灰/深灰底色
+        canvas.DrawRect(new SKRect(0, 0, r.Width, r.Height), _codeBgPaint);
         using var barPaint = new SKPaint
         {
-            Color = new SKColor(0x60, 0x8b, 0x4e),
+            // 竖条颜色使用表格/引用边框色（与表格边框一致）
+            Color = _tableBorderPaint.Color,
             Style = SKPaintStyle.Fill
         };
         canvas.DrawRect(new SKRect(0, 0, barWidth, r.Height), barPaint);
@@ -732,20 +729,15 @@ public sealed class SkiaRenderer : ITextMeasurer
         canvas.DrawRect(new SKRect(0, 0, r.Width, r.Height), _codeBgPaint);
     }
 
-    /// <summary>定义列表：背景 + 左侧竖条。</summary>
+    /// <summary>定义列表：背景 + 左侧竖条，复用代码块背景与边框色。</summary>
     private void DrawDefinitionListStyle(SKCanvas canvas, LayoutBlock block)
     {
         const float barWidth = 3f;
         var r = block.Bounds;
-        using var bgPaint = new SKPaint
-        {
-            Color = new SKColor(0x28, 0x28, 0x2c),
-            Style = SKPaintStyle.Fill
-        };
-        canvas.DrawRect(new SKRect(0, 0, r.Width, r.Height), bgPaint);
+        canvas.DrawRect(new SKRect(0, 0, r.Width, r.Height), _codeBgPaint);
         using var barPaint = new SKPaint
         {
-            Color = new SKColor(0x4a, 0x7a, 0x9a),
+            Color = _tableBorderPaint.Color,
             Style = SKPaintStyle.Fill
         };
         canvas.DrawRect(new SKRect(0, 0, barWidth, r.Height), barPaint);

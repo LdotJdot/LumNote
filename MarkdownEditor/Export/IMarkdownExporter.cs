@@ -5,7 +5,7 @@ namespace MarkdownEditor.Export;
 /// </summary>
 public interface IMarkdownExporter
 {
-    /// <summary>格式标识，如 "html", "pdf", "docx", "png"。</summary>
+    /// <summary>格式标识，如 "html", "pdf", "png"。</summary>
     string FormatId { get; }
 
     /// <summary>显示名称，用于菜单与对话框。</summary>

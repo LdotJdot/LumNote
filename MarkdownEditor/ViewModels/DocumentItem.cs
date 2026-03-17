@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace MarkdownEditor.ViewModels;
 
@@ -6,10 +7,16 @@ public sealed class DocumentItem
 {
     public string FullPath { get; }
     public string RelativePath { get; }
+
+    /// <summary>工作区内该文件所属的根目录路径；多根时用于文件树分组。</summary>
+    public string? WorkspaceRoot { get; set; }
     public string DisplayName => string.IsNullOrEmpty(FullPath) ? RelativePath : System.IO.Path.GetFileName(FullPath);
 
-    /// <summary>Tab 标签中使用的文档图标（与文件树保持一致）。</summary>
-    public string IconText => "📄";
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+        { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg" };
+
+    /// <summary>Tab 标签中使用的文档图标（与文件树一致：图片🖼️，其余📄）。</summary>
+    public string IconText => !string.IsNullOrEmpty(FullPath) && ImageExtensions.Contains(System.IO.Path.GetExtension(FullPath)) ? "🖼️" : "📄";
 
     /// <summary>
     /// 当前文档在内存中的内容缓存，用于多标签快速切换。

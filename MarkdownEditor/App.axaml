@@ -3,32 +3,63 @@
              x:Class="MarkdownEditor.App"
              x:CompileBindings="True"
              RequestedThemeVariant="Dark">
+  <Application.Resources>
+    <!-- 界面样式默认值（深色），运行时由 config 的 ui:style:dark / ui:style:light 覆盖 -->
+    <SolidColorBrush x:Key="WindowBackground" Color="#1e1e1e"/>
+    <SolidColorBrush x:Key="TitleBarBackground" Color="#252526"/>
+    <SolidColorBrush x:Key="TitleBarForeground" Color="#f3f3f3"/>
+    <SolidColorBrush x:Key="SidebarBackground" Color="#252526"/>
+    <SolidColorBrush x:Key="SidebarBorderBrush" Color="#3f3f46"/>
+    <SolidColorBrush x:Key="SidebarHeaderBackground" Color="#333333"/>
+    <SolidColorBrush x:Key="SidebarTextForeground" Color="#cccccc"/>
+    <SolidColorBrush x:Key="ExplorerHeaderBackground" Color="#2d2d30"/>
+    <SolidColorBrush x:Key="ExplorerHeaderForeground" Color="#cccccc"/>
+    <SolidColorBrush x:Key="WelcomePageBackground" Color="#1e1e1e"/>
+    <SolidColorBrush x:Key="WelcomePageTextForeground" Color="#cccccc"/>
+    <SolidColorBrush x:Key="WelcomePageLinkForeground" Color="#3794ff"/>
+    <SolidColorBrush x:Key="TabBarBackground" Color="#252526"/>
+    <SolidColorBrush x:Key="TabBarBorderBrush" Color="#3f3f46"/>
+    <SolidColorBrush x:Key="ContentBackground" Color="#1e1e1e"/>
+    <SolidColorBrush x:Key="EditorForeground" Color="#d4d4d4"/>
+    <SolidColorBrush x:Key="StatusBarBackground" Color="#007acc"/>
+    <SolidColorBrush x:Key="StatusBarForeground" Color="White"/>
+    <SolidColorBrush x:Key="FileChangedBarBackground" Color="#3e3e3e"/>
+    <SolidColorBrush x:Key="FileChangedBarForeground" Color="#d4d4d4"/>
+    <SolidColorBrush x:Key="ButtonForeground" Color="#f3f3f3"/>
+    <SolidColorBrush x:Key="ButtonHoverBackground" Color="#3e3e3e"/>
+    <SolidColorBrush x:Key="ButtonPressedBackground" Color="#2d2d2d"/>
+    <SolidColorBrush x:Key="TabItemForeground" Color="#cccccc"/>
+    <SolidColorBrush x:Key="TabItemSelectedForeground" Color="#ffffff"/>
+    <SolidColorBrush x:Key="TabItemHoverBackground" Color="#3a3d41"/>
+    <SolidColorBrush x:Key="TabItemSelectedBackground" Color="#333333"/>
+    <SolidColorBrush x:Key="InputBackground" Color="#3c3c3c"/>
+    <SolidColorBrush x:Key="InputForeground" Color="#f3f3f3"/>
+    <SolidColorBrush x:Key="InputBorderBrush" Color="#3f3f46"/>
+    <SolidColorBrush x:Key="SplitterBorderBrush" Color="#3f3f46"/>
+    <SolidColorBrush x:Key="ListBoxItemSelectedBackground" Color="#094771"/>
+    <SolidColorBrush x:Key="ListBoxItemSelectedForeground" Color="White"/>
+  </Application.Resources>
   <Application.Styles>
     <FluentTheme />
 
-    <!-- AvaloniaEdit 默认样式（必须引入，否则 TextEditor 无模板不显示） -->
     <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml"/>
 
-    <!-- 全局深色窗口背景，接近 VSCode -->
+    <!-- 样式由 DynamicResource 绑定到配置，切换主题时从 config 注入 -->
     <Style Selector="Window">
-      <Setter Property="Background" Value="#1e1e1e"/>
+      <Setter Property="Background" Value="{DynamicResource WindowBackground}"/>
     </Style>
-
-    <!-- 默认文本框深色样式，局部可覆盖 -->
     <Style Selector="TextBox">
       <Setter Property="Padding" Value="8,6"/>
-      <Setter Property="Background" Value="#1e1e1e"/>
-      <Setter Property="Foreground" Value="#d4d4d4"/>
-      <Setter Property="BorderBrush" Value="#3f3f46"/>
-      <Setter Property="CaretBrush" Value="#ffffff"/>
+      <Setter Property="Background" Value="{DynamicResource InputBackground}"/>
+      <Setter Property="Foreground" Value="{DynamicResource InputForeground}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource InputBorderBrush}"/>
+      <Setter Property="CaretBrush" Value="{DynamicResource TitleBarForeground}"/>
     </Style>
-
-    <!-- 列表选中项深色高亮 -->
     <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-      <Setter Property="Background" Value="#094771"/>
-      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="Background" Value="{DynamicResource ListBoxItemSelectedBackground}"/>
+      <Setter Property="Foreground" Value="{DynamicResource ListBoxItemSelectedForeground}"/>
     </Style>
 
-    <!-- 这里不再全局改 ScrollViewer/ScrollBar，恢复 Fluent 默认滚动条行为 -->
+    <!-- 浅色主题仅保留 RequestedThemeVariant，具体颜色由注入的 LightStyle 提供 -->
   </Application.Styles>
 </Application>

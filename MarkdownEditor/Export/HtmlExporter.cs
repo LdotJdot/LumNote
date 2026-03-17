@@ -22,7 +22,7 @@ public sealed class HtmlExporter : IMarkdownExporter
         try
         {
             var doc = MarkdownParser.Parse(markdown);
-            var html = BuildHtml(doc, documentBasePath);
+            var html = BuildHtml(doc, documentBasePath, options?.StyleConfig);
             File.WriteAllText(outputPath, html, Encoding.UTF8);
             return Task.FromResult(new ExportResult(true));
         }
@@ -32,13 +32,13 @@ public sealed class HtmlExporter : IMarkdownExporter
         }
     }
 
-    private static string BuildHtml(DocumentNode doc, string documentBasePath)
+    private static string BuildHtml(DocumentNode doc, string documentBasePath, MarkdownStyleConfig? style)
     {
         var sb = new StringBuilder();
         sb.Append("<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>");
         sb.Append(HtmlEncode(GetTitleFromDoc(doc)));
         sb.Append("</title><style>");
-        sb.Append(EmbeddedCss());
+        sb.Append(EmbeddedCss(style));
         sb.Append("</style></head><body>");
         foreach (var child in doc.Children)
             AppendBlock(sb, child, documentBasePath);
@@ -255,28 +255,61 @@ public sealed class HtmlExporter : IMarkdownExporter
             .Replace("\"", "&quot;", StringComparison.Ordinal);
     }
 
-    private static string EmbeddedCss()
+    private static string EmbeddedCss(MarkdownStyleConfig? style)
     {
-        return """
-            body { font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; margin: 1em; line-height: 1.5; color: #d4d4d4; background: #1e1e1e; }
-            h1,h2,h3,h4,h5,h6 { margin: 0.8em 0 0.4em; font-weight: 600; }
-            h1 { font-size: 28px; }
-            h2 { font-size: 24px; }
-            h3 { font-size: 20px; }
-            p { margin: 0.5em 0; }
-            pre { background: #252526; padding: 16px; border-radius: 4px; overflow-x: auto; }
-            code { font-family: "Cascadia Code", Consolas, monospace; font-size: 0.9em; }
-            pre code { background: none; padding: 0; color: #d4d4d4; }
-            blockquote { border-left: 4px solid #3f3f46; margin: 0.5em 0; padding-left: 1em; color: #b0b0b0; }
-            ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
-            table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
-            th, td { border: 1px solid #3f3f46; padding: 6px 10px; text-align: left; }
-            th { background: #2a2d2e; font-weight: 600; }
-            a { color: #3794ff; text-decoration: none; }
-            a:hover { text-decoration: underline; }
-            hr { border: none; border-top: 1px solid #3f3f46; margin: 1em 0; }
-            .math-block, .math-inline { font-style: italic; color: #b5cea8; }
-            .footnote-ref { font-size: 0.85em; }
-            """;
+        string textColor = "#d4d4d4";
+        string backgroundColor = "#1e1e1e";
+        string codeBg = "#252526";
+        string codeText = "#d4d4d4";
+        string borderColor = "#3f3f46";
+        string tableHeaderBg = "#2a2d2e";
+        string linkColor = "#3794ff";
+        string blockquoteColor = "#b0b0b0";
+        string bodyFont = "Microsoft YaHei UI, Segoe UI, sans-serif";
+        string codeFont = "Cascadia Code, Consolas, monospace";
+        int h1Size = 28, h2Size = 24;
+        if (style != null)
+        {
+            textColor = style.TextColor;
+            backgroundColor = style.BackgroundColor;
+            codeBg = style.CodeBlockBackground;
+            codeText = style.CodeBlockTextColor;
+            borderColor = style.TableBorderColor;
+            tableHeaderBg = style.TableHeaderBackground;
+            linkColor = style.LinkColor;
+            blockquoteColor = style.BlockquoteBorderColor;
+            bodyFont = style.BodyFontFamily ?? bodyFont;
+            codeFont = style.CodeFontFamily ?? codeFont;
+            h1Size = style.Heading1Size;
+            h2Size = style.Heading2Size;
+        }
+
+        var sb = new StringBuilder();
+        sb.Append("body { font-family: \"").Append(EscapeCssString(bodyFont)).Append("\"; margin: 1em; line-height: 1.5; color: ").Append(textColor).Append("; background: ").Append(backgroundColor).Append("; }\n");
+        sb.Append("h1,h2,h3,h4,h5,h6 { margin: 0.8em 0 0.4em; font-weight: 600; }\n");
+        sb.Append("h1 { font-size: ").Append(h1Size).Append("px; }\n");
+        sb.Append("h2 { font-size: ").Append(h2Size).Append("px; }\n");
+        sb.Append("h3 { font-size: 20px; }\n");
+        sb.Append("p { margin: 0.5em 0; }\n");
+        sb.Append("pre { background: ").Append(codeBg).Append("; padding: 16px; border-radius: 4px; overflow-x: auto; }\n");
+        sb.Append("code { font-family: \"").Append(EscapeCssString(codeFont)).Append("\"; font-size: 0.9em; }\n");
+        sb.Append("pre code { background: none; padding: 0; color: ").Append(codeText).Append("; }\n");
+        sb.Append("blockquote { border-left: 4px solid ").Append(blockquoteColor).Append("; margin: 0.5em 0; padding-left: 1em; color: ").Append(blockquoteColor).Append("; }\n");
+        sb.Append("ul, ol { margin: 0.5em 0; padding-left: 1.5em; }\n");
+        sb.Append("table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }\n");
+        sb.Append("th, td { border: 1px solid ").Append(borderColor).Append("; padding: 6px 10px; text-align: left; }\n");
+        sb.Append("th { background: ").Append(tableHeaderBg).Append("; font-weight: 600; }\n");
+        sb.Append("a { color: ").Append(linkColor).Append("; text-decoration: none; }\n");
+        sb.Append("a:hover { text-decoration: underline; }\n");
+        sb.Append("hr { border: none; border-top: 1px solid ").Append(borderColor).Append("; margin: 1em 0; }\n");
+        sb.Append(".math-block, .math-inline { font-style: italic; color: #b5cea8; }\n");
+        sb.Append(".footnote-ref { font-size: 0.85em; }\n");
+        return sb.ToString();
+    }
+
+    private static string EscapeCssString(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s;
+        return s.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
     }
 }

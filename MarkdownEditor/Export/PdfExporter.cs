@@ -27,7 +27,7 @@ public sealed class PdfExporter : IMarkdownExporter
     {
         try
         {
-            var config = EngineConfig.FromStyle(null);
+            var config = EngineConfig.FromStyle(options?.StyleConfig) ?? new EngineConfig();
             var imageLoader = new BasePathImageLoader(documentBasePath ?? "");
             var doc = new StringDocumentSource(markdown ?? "");
             var engine = new RenderEngine(PageWidthPt, config, imageLoader);
@@ -42,7 +42,13 @@ public sealed class PdfExporter : IMarkdownExporter
             while (scrollY < totalHeight)
             {
                 using var canvas = docPdf.BeginPage(PageWidthPt, PageHeightPt);
-                canvas.Clear(new SKColor(0x1e, 0x1e, 0x1e));
+                // 使用页面背景色清空画布，与预览区一致；若用 TextColor 会导致文字与背景同色不可见
+                var bg = config.PageBackground;
+                canvas.Clear(new SKColor(
+                    (byte)((bg >> 16) & 0xFF),
+                    (byte)((bg >> 8) & 0xFF),
+                    (byte)(bg & 0xFF),
+                    (byte)((bg >> 24) & 0xFF)));
 
                 var ctx = new PdfSkiaContext
                 {

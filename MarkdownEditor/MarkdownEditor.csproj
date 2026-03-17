@@ -5,13 +5,15 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>asserts\icon.ico</ApplicationIcon>
     <ApplicationTitle>Markdown Editor</ApplicationTitle>
     <Company></Company>
     <Product>Markdown Document Editor</Product>
     <Description>跨平台 Markdown 文档编辑器 - AOT 编译，高性能</Description>
-    
+	  <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+	  <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <!-- AOT 发布配置 -->
-    <PublishAot>true</PublishAot>
+   <!--<PublishAot>true</PublishAot>-->
     <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
     
     <!-- 发布时裁剪，减小体积 -->
@@ -20,6 +22,14 @@
     
     <!-- 启用 AOT 分析 -->
     <IsAotCompatible>true</IsAotCompatible>
+    
+    <!-- 体积优化：优先减小 exe 体积（会略微牺牲运行速度） -->
+    <OptimizationPreference>Size</OptimizationPreference>
+    <!-- 移除全球化数据，显著减小体积；若需按系统区域显示数字/日期格式可改为 false -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Release 下不嵌入调试符号，减小体积 -->
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
   </PropertyGroup>
 
   <ItemGroup>
@@ -49,7 +59,6 @@
     <PackageReference Include="Avalonia.Skia" Version="11.2.0" />
     <PackageReference Include="System.Reactive" Version="6.0.1" />
     <PackageReference Include="Avalonia.AvaloniaEdit" Version="11.2.0" />
-    <PackageReference Include="DocumentFormat.OpenXml" Version="3.0.0" />
     <PackageReference Include="LumConfig" Version="1.0.3" />
   </ItemGroup>
 
