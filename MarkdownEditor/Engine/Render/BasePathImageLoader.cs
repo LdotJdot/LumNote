@@ -1,3 +1,5 @@
+using MarkdownEditor.Core;
+
 namespace MarkdownEditor.Engine.Render;
 
 /// <summary>
@@ -22,14 +24,25 @@ public sealed class BasePathImageLoader : IImageLoader
     public SkiaSharp.SKBitmap? TryGetImage(string url)
     {
         if (string.IsNullOrEmpty(url)) return null;
-        var resolved = url;
-        if (!Path.IsPathRooted(url)
-            && !url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-            && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-            && !url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrEmpty(_basePath))
+        var raw = PathSanitizer.Sanitize(url);
+        if (raw.Length >= 2 && raw[0] == '<' && raw[^1] == '>')
+            raw = raw[1..^1].Trim();
+        var resolved = raw;
+        if (DefaultImageLoader.IsNetworkImageUrl(raw) || raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            return _inner.TryGetImage(resolved);
+
+        if (!Path.IsPathRooted(raw) && !string.IsNullOrEmpty(_basePath))
         {
-            resolved = Path.GetFullPath(Path.Combine(_basePath, url.Replace('/', Path.DirectorySeparatorChar)));
+            var sep = raw.Replace('/', Path.DirectorySeparatorChar);
+            try
+            {
+                var baseFull = Path.GetFullPath(_basePath.TrimEnd(Path.DirectorySeparatorChar, '/'));
+                resolved = Path.GetFullPath(Path.Combine(baseFull, sep));
+            }
+            catch
+            {
+                resolved = Path.GetFullPath(Path.Combine(_basePath, sep));
+            }
         }
         return _inner.TryGetImage(resolved);
     }

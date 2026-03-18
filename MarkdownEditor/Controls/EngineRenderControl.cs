@@ -193,9 +193,8 @@ public class EngineRenderControl : Control
             return _engine;
         var config = EffectiveConfig;
         var w = (float)Math.Max(1, Bounds.Width - config.ContentPaddingX * 2);
-        IImageLoader? imageLoader = string.IsNullOrEmpty(_documentBasePath)
-            ? null
-            : new BasePathImageLoader(_documentBasePath);
+        // 始终用 BasePathImageLoader：有文档目录时解析相对路径；绝对路径与网络图仍走内层 DefaultImageLoader（本地只读文件、网络才 Http）
+        var imageLoader = new BasePathImageLoader(_documentBasePath ?? "");
         _engine = new RenderEngine(w, config, imageLoader);
         if (_engine.GetImageLoader() is { } loader)
             loader.ImageLoaded += () =>
@@ -590,6 +589,21 @@ public class EngineRenderControl : Control
     private void TryOpenLink(string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return;
+        url = PathSanitizer.Sanitize(url);
+        if (url.Length >= 2 && url[0] == '<' && url[^1] == '>')
+            url = url[1..^1].Trim();
+        if (url.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                url = new Uri(url).LocalPath;
+            }
+            catch
+            {
+                return;
+            }
+        }
+
         if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
             Core.OpenUrlService.Open(url);
@@ -617,25 +631,44 @@ public class EngineRenderControl : Control
             }
             if (ImageExtensions.Contains(ext))
             {
-                if (DataContext is MainViewModel m)
-                    m.OpenImageInTab(resolved);
-                else
+                try
                 {
-                    try
-                    {
-                        Process.Start(new ProcessStartInfo { FileName = resolved, UseShellExecute = true });
-                    }
-                    catch { }
+                    if (DataContext is MainViewModel m)
+                        m.OpenImageInTab(resolved);
+                    else
+                        Process.Start(
+                            new ProcessStartInfo { FileName = resolved, UseShellExecute = true }
+                        );
                 }
+                catch (System.ComponentModel.Win32Exception) { }
+                catch { }
                 return;
             }
             try
             {
                 Process.Start(new ProcessStartInfo { FileName = resolved, UseShellExecute = true });
             }
+            catch (System.ComponentModel.Win32Exception) { }
             catch { }
             return;
         }
+
+        // 已是本地盘符/UNC 等但文件不存在：勿交给 OpenUrl（旧逻辑会拼 https:// 导致 Win32Exception）
+        var checkLocal = url.Replace('/', Path.DirectorySeparatorChar);
+        if (Path.IsPathRooted(checkLocal) || checkLocal.StartsWith("\\\\", StringComparison.Ordinal))
+        {
+            try
+            {
+                checkLocal = Path.GetFullPath(checkLocal);
+            }
+            catch
+            {
+                return;
+            }
+            if (!File.Exists(checkLocal) && !Directory.Exists(checkLocal))
+                return;
+        }
+
         Core.OpenUrlService.Open(url);
     }
 

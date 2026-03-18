@@ -17,6 +17,8 @@ using AvaloniaEdit.Search;
 using MarkdownEditor.ViewModels;
 using MarkdownEditor.Engine.Highlighting;
 using MarkdownEditor.Export;
+using System.Diagnostics;
+using System.IO;
 using System.Threading.Tasks;
 
 namespace MarkdownEditor.Views;
@@ -137,6 +139,8 @@ public partial class MainWindow : Window
             LayoutEditorOnlyMenuItem.Click += (_, _) => vm.LayoutMode = EditorLayoutMode.EditorOnly;
             LayoutPreviewOnlyMenuItem.Click += (_, _) => vm.LayoutMode = EditorLayoutMode.PreviewOnly;
         }
+
+        StatusBarPathBorder?.Tapped += (_, _) => OpenCurrentFileFolderInExplorer();
 
         NewFileMenuItem.Click += (_, _) => vm.NewDocument();
 
@@ -1008,6 +1012,8 @@ public partial class MainWindow : Window
         EditorContextCopy.Click += (_, _) => EditorCopy();
         EditorContextPaste.Click += (_, _) => EditorPaste();
         EditorContextSelectAll.Click += (_, _) => EditorSelectAll();
+        EditorContextInsertLink.Click += async (_, _) => await EditorInsertMarkdownResourceAsync(vm, isImage: false);
+        EditorContextInsertImage.Click += async (_, _) => await EditorInsertMarkdownResourceAsync(vm, isImage: true);
 
         if (EditorTextBox.ContextFlyout is MenuFlyout editorFlyout)
         {
@@ -1386,6 +1392,19 @@ public partial class MainWindow : Window
         editor.Document.Replace(offset, length, text);
     }
 
+    private async System.Threading.Tasks.Task EditorInsertMarkdownResourceAsync(MainViewModel vm, bool isImage)
+    {
+        var docPath = string.IsNullOrWhiteSpace(vm.CurrentFilePath) ? null : vm.CurrentFilePath;
+        var md = await InsertMarkdownResourceWindow.ShowInsertAsync(this, isImage, docPath, StorageProvider);
+        if (string.IsNullOrEmpty(md)) return;
+        if (EditorTextBox is not TextEditor editor || editor.Document == null) return;
+        var offset = editor.TextArea.Caret.Offset;
+        editor.Document.Insert(offset, md);
+        editor.TextArea.Caret.Offset = offset + md.Length;
+        editor.TextArea.Caret.BringCaretToView();
+        editor.Focus();
+    }
+
     private void EditorSelectAll()
     {
         if (EditorTextBox is not TextEditor editor || editor.Document == null) return;
@@ -1676,31 +1695,124 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>底部状态栏路径：在系统文件管理器中打开所在文件夹。</summary>
+    private void OpenCurrentFileFolderInExplorer()
+    {
+        if (DataContext is not MainViewModel vm)
+            return;
+        var path = vm.CurrentFilePath?.Trim();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        string full;
+        try
+        {
+            full = Path.GetFullPath(path);
+        }
+        catch
+        {
+            return;
+        }
+
+        string? dir = Directory.Exists(full) ? full : Path.GetDirectoryName(full);
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+            return;
+
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                Process.Start(
+                    new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = "\"" + dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + "\"",
+                        UseShellExecute = true,
+                    }
+                );
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                Process.Start("open", dir);
+            }
+            else
+            {
+                Process.Start(
+                    new ProcessStartInfo
+                    {
+                        FileName = "xdg-open",
+                        Arguments = "\"" + dir + "\"",
+                        UseShellExecute = true,
+                    }
+                );
+            }
+        }
+        catch
+        {
+            /* 忽略 */
+        }
+    }
+
     private async void ShowAboutDialog()
     {
+        const double textMaxW = 420;
         var about = new Window
         {
             Title = "关于",
-            Width = 320,
-            Height = 180,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Icon = GetAppIcon()
+            Icon = GetAppIcon(),
+            CanResize = true,
+            MinWidth = 300,
+            MinHeight = 140,
+            Width = 460,
+            MaxWidth = 520,
+            MaxHeight = 560,
+            SizeToContent = SizeToContent.Height,
         };
-        var ok = new Button { Content = "确定", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right };
-        ok.Click += (_, _) => about.Close();
-        about.Content = new StackPanel
+
+        static TextBlock Para(string text, FontWeight weight = FontWeight.Normal) =>
+            new()
+            {
+                Text = text,
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = textMaxW,
+                TextAlignment =TextAlignment.Justify,
+                FontWeight = weight,
+            };
+
+        var ok = new Button
         {
-            Margin = new Thickness(16),
-            Spacing = 8,
+            Content = "确定",
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            MinWidth = 80,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        ok.Click += (_, _) => about.Close();
+
+        var panel = new StackPanel
+        {
+            Margin = new Thickness(20, 16, 20, 16),
+            Spacing = 10,
             Children =
             {
-                new TextBlock { Text = "Ver 1.0.0 @ 2026", FontWeight = FontWeight.SemiBold },
-                new TextBlock { Text = "Contributors:", FontWeight = FontWeight.SemiBold },
-                new TextBlock { Text = "LdotJdot" },
-                new TextBlock { Text = "Herman Chen" },
-                ok
-            }
+                Para("Ver 1.0.0 @ 2026", FontWeight.SemiBold),
+                Para(
+                    "We built this to solve our own problems. Now we maintain it to solve yours. Free forever. Works offline. No accounts, no tracking, no expiration date. Just a reliable tool that grows with you."
+                ),
+                Para("Spc: LdotJdot, Herman Chen"),
+                ok,
+            },
         };
+
+        about.Content = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            MaxHeight = 480,
+            Padding = new Thickness(0),
+            Content = panel,
+        };
+
         await about.ShowDialog(this);
     }
 

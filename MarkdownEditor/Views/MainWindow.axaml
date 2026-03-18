@@ -887,6 +887,9 @@
                   <MenuItem Header="-"/>
                   <MenuItem Header="全选" x:Name="EditorContextSelectAll"/>
                   <MenuItem Header="-"/>
+                  <MenuItem Header="插入链接…" x:Name="EditorContextInsertLink"/>
+                  <MenuItem Header="插入图片…" x:Name="EditorContextInsertImage"/>
+                  <MenuItem Header="-"/>
                   <MenuItem Header="列选择：Alt+拖拽" x:Name="EditorContextColumnSelectHint" IsEnabled="False"/>
                 </MenuFlyout>
               </Control.ContextFlyout>
@@ -980,17 +983,26 @@
             Height="24"
             Classes="statusBar">
       <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="8,0">
-        <StackPanel Grid.Column="0"
-                    Orientation="Horizontal"
-                    Spacing="4"
-                    VerticalAlignment="Center">
-          <TextBlock Text="{Binding CurrentFilePath, FallbackValue=未打开文档}"
+        <Border x:Name="StatusBarPathBorder"
+                Grid.Column="0"
+                Background="Transparent"
+                Padding="6,2"
+                CornerRadius="3"
+                VerticalAlignment="Center"
+                ToolTip.Tip="当前文件路径，点击在资源管理器中打开所在文件夹"
+                Cursor="Arrow">
+          <Border.Styles>
+            <Style Selector="Border#StatusBarPathBorder:pointerover">
+              <Setter Property="Background" Value="#22FFFFFF"/>
+            </Style>
+          </Border.Styles>
+          <TextBlock x:Name="StatusBarPathTextBlock"
+                     Text="{Binding CurrentFilePath, FallbackValue=未打开文档}"
                      Foreground="{DynamicResource StatusBarForeground}"
                      FontSize="11"
                      TextTrimming="CharacterEllipsis"
-                     MaxWidth="480"
-                     ToolTip.Tip="{Binding CurrentFilePath}"/>
-        </StackPanel>
+                     MaxWidth="468"/>
+        </Border>
 
         <StackPanel Grid.Column="2"
                     Orientation="Horizontal"

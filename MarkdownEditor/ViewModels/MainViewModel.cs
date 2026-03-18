@@ -358,6 +358,25 @@ public sealed class MainViewModel : ViewModelBase
     /// </summary>
     public string DocumentBasePath => _documentBasePath;
 
+    /// <summary>
+    /// LoadFromDocumentItem / ClearEditor 直接改 _currentFilePath 时须同步，否则预览相对路径图片一直用错基目录。
+    /// </summary>
+    private void SyncDocumentBasePathWithCurrentFile()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_currentFilePath))
+                _documentBasePath = "";
+            else
+                _documentBasePath = Path.GetDirectoryName(Path.GetFullPath(_currentFilePath)) ?? "";
+        }
+        catch
+        {
+            _documentBasePath = "";
+        }
+        OnPropertyChanged(nameof(DocumentBasePath));
+    }
+
     public string CurrentFileName
     {
         get => _currentFileName;
@@ -2096,6 +2115,7 @@ public sealed class MainViewModel : ViewModelBase
         _isModified = false;
         _activeDocument = null;
         PreviewImagePath = null;
+        SyncDocumentBasePathWithCurrentFile();
         OnPropertyChanged(nameof(CurrentMarkdown));
         OnPropertyChanged(nameof(CurrentFilePath));
         OnPropertyChanged(nameof(CurrentFileName));
@@ -2114,6 +2134,7 @@ public sealed class MainViewModel : ViewModelBase
             _isModified = false;
             var pathKey = doc.FullPath;
             PendingPreviewScrollRatio = _previewScrollRatiosByPath.TryGetValue(pathKey, out var r) ? r : null;
+            SyncDocumentBasePathWithCurrentFile();
             OnPropertyChanged(nameof(CurrentMarkdown));
             OnPropertyChanged(nameof(CurrentFilePath));
             OnPropertyChanged(nameof(CurrentFileName));
@@ -2131,6 +2152,7 @@ public sealed class MainViewModel : ViewModelBase
         var pathKey2 = string.IsNullOrEmpty(doc.FullPath) ? "untitled:" + doc.DisplayName : doc.FullPath;
         PendingPreviewScrollRatio = _previewScrollRatiosByPath.TryGetValue(pathKey2, out var r2) ? r2 : null;
 
+        SyncDocumentBasePathWithCurrentFile();
         OnPropertyChanged(nameof(CurrentMarkdown));
         OnPropertyChanged(nameof(CurrentFilePath));
         OnPropertyChanged(nameof(CurrentFileName));

@@ -37,6 +37,13 @@ vvvccc
  
 ## 2. 图片与链接
  
+ 
+ ![图片](‪D:/Desktop/pdf.png)
+ 
+ [链接](../../../C3工艺.png)
+ 
+ ![图片](../../../设备清单.png)
+ 
 图片:
 ![leanote](http://leanote.com/images/logo/leanote_icon_blue.png)
 链接:

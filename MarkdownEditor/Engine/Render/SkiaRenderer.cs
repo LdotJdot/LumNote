@@ -582,7 +582,8 @@ public sealed class SkiaRenderer : ITextMeasurer
         var rect = run.Bounds;
         var bmp = url != null && _imageLoader != null ? _imageLoader.TryGetImage(url) : null;
 
-        if (bmp != null && !bmp.IsEmpty)
+        // 勿用 bmp.IsEmpty：Skia 文档说明 IsEmpty 在尺寸非零时仍可能为 true；字节解码的图更易中招。
+        if (bmp != null && bmp.Width > 0 && bmp.Height > 0)
         {
             var srcRect = new SKRectI(0, 0, bmp.Width, bmp.Height);
             // 按本身尺寸/宽高比绘制，不拉伸；若分配区域小于图片则等比缩小放入
