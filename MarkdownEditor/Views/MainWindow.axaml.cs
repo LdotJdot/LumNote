@@ -81,8 +81,10 @@ public partial class MainWindow : Window
         {
             ApplyThemeFromConfig(vm);
             SetupScrollSync();
+            RegisterAutoSaveDialogs(vm);
             if (PreviewEngine != null && DataContext is MainViewModel m)
                 PreviewEngine.GotFocus += (_, _) => m.ActivePane = "Preview";
+            EditorPaneGrid?.AddHandler(PointerWheelChangedEvent, OnEditorPanePointerWheelZoom, RoutingStrategies.Tunnel);
             // 默认让编辑区获得焦点，使 Ctrl+/- 控制编辑区缩放，直到用户点击预览区
             EditorTextBox?.Focus();
         };
@@ -1113,6 +1115,22 @@ public partial class MainWindow : Window
     }
 
     /// <summary>根据当前键盘焦点所在控件同步 ActivePane，使 Ctrl+/- 缩放到正确的窗格（编辑区内层获焦时 GotFocus 可能不冒泡到 EditorTextBox）。</summary>
+    private void OnEditorPanePointerWheelZoom(object? sender, PointerWheelEventArgs e)
+    {
+        if ((e.KeyModifiers & KeyModifiers.Control) == 0)
+            return;
+        if (DataContext is not MainViewModel vm)
+            return;
+        vm.ActivePane = "Editor";
+        if (e.Delta.Y > 0)
+            vm.ZoomInCommand.Execute(null);
+        else if (e.Delta.Y < 0)
+            vm.ZoomOutCommand.Execute(null);
+        else
+            return;
+        e.Handled = true;
+    }
+
     private void SyncActivePaneFromFocus(MainViewModel vm)
     {
         var focused = FocusManager?.GetFocusedElement() as Visual;
@@ -1693,6 +1711,71 @@ public partial class MainWindow : Window
             };
             await msg.ShowDialog(this);
         }
+    }
+
+    /// <summary>自动保存：缺失文件确认、失败提示（必须在 UI 线程弹窗）。</summary>
+    private void RegisterAutoSaveDialogs(MainViewModel vm)
+    {
+        vm.AutoSaveAskRecreateMissingFileAsync = async path =>
+        {
+            bool confirm = false;
+            var dlg = new Window
+            {
+                Title = "自动保存",
+                Width = 480,
+                MinHeight = 140,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Icon = GetAppIcon(),
+            };
+            var yes = new Button { Content = "重新创建并保存", Margin = new Thickness(0, 0, 8, 0) };
+            yes.Click += (_, _) => { confirm = true; dlg.Close(); };
+            var no = new Button { Content = "暂不保存" };
+            no.Click += (_, _) => dlg.Close();
+            var buttons = new StackPanel
+            {
+                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                Children = { yes, no },
+            };
+            dlg.Content = new StackPanel
+            {
+                Margin = new Thickness(16),
+                Spacing = 12,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text =
+                            $"磁盘上已找不到该文件（可能已被删除或移动）：\n\n{path}\n\n是否要在原路径重新创建文件并写入当前编辑内容？",
+                        TextWrapping = TextWrapping.Wrap,
+                    },
+                    buttons,
+                },
+            };
+            await dlg.ShowDialog(this);
+            return confirm;
+        };
+
+        vm.AutoSaveShowFailureAsync = async message =>
+        {
+            var msg = new Window
+            {
+                Title = "自动保存失败",
+                Width = 420,
+                MinHeight = 120,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Icon = GetAppIcon(),
+            };
+            var ok = new Button { Content = "确定", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right };
+            ok.Click += (_, _) => msg.Close();
+            msg.Content = new StackPanel
+            {
+                Margin = new Thickness(16),
+                Spacing = 12,
+                Children = { new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap }, ok },
+            };
+            await msg.ShowDialog(this);
+        };
     }
 
     /// <summary>底部状态栏路径：在系统文件管理器中打开所在文件夹。</summary>

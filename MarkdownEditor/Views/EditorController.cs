@@ -400,6 +400,10 @@ internal sealed class EditorController
 
         try
         {
+            // 未量完或换主题等导致可视行失效时，访问 VisualLines 会抛 VisualLinesInvalidException。
+            if (!textView.VisualLinesValid)
+                return null;
+
             var visualLines = textView.VisualLines;
             if (visualLines == null || visualLines.Count == 0)
                 return null;

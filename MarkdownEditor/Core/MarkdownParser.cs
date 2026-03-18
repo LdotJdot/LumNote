@@ -478,7 +478,8 @@ public static class MarkdownParser
             {
                 isTask = true;
                 isChecked = true;
-                prefixLen = 6;
+                // 与 "- [ ]" 相同为 5 个字符（x 仅占位空格），误用 6 会在 "]" 后无空格时吃掉正文首字符
+                prefixLen = 5;
                 content = trimmed[prefixLen..].TrimStart();
             }
             else if (

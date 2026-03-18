@@ -14,7 +14,7 @@ using System.Windows.Input;
 
 namespace MarkdownEditor.ViewModels;
 
-public sealed class MainViewModel : ViewModelBase
+public sealed partial class MainViewModel : ViewModelBase
 {
     public Core.AppConfig Config { get; } = Core.AppConfig.Load(Core.AppConfig.DefaultConfigPath);
 
@@ -34,8 +34,41 @@ public sealed class MainViewModel : ViewModelBase
             Config.Ui.Theme = isLight ? "Light" : "Dark";
             OnPropertyChanged(nameof(CurrentThemeDisplayName));
             OnPropertyChanged(nameof(Config));
+            NotifyThemeToggleUi();
             ThemeChanged?.Invoke();
         }
+    }
+
+    /// <summary>状态栏单键主题切换：浅色显示 ☀，深色显示 🌙。</summary>
+    public string ThemeToggleGlyph =>
+        string.Equals(Config.Ui.Theme, "Light", StringComparison.OrdinalIgnoreCase) ? "☀" : "🌙";
+
+    private void NotifyThemeToggleUi()
+    {
+        OnPropertyChanged(nameof(ThemeToggleGlyph));
+    }
+
+    /// <summary>在浅色 / 深色 bundled 主题间切换（界面 + Markdown 预设）。</summary>
+    public ICommand ToggleThemeCommand =>
+        new RelayCommand(() =>
+        {
+            var light = string.Equals(Config.Ui.Theme, "Light", StringComparison.OrdinalIgnoreCase);
+            ApplyBundledTheme(lightUi: !light);
+        });
+
+    private void ApplyBundledTheme(bool lightUi)
+    {
+        var keepPreviewZoom = PreviewZoomLevel;
+        Config.Ui.Theme = lightUi ? "Light" : "Dark";
+        Config.ApplyPreset(lightUi ? "浅色" : "深色");
+        Config.Markdown.ZoomLevel = keepPreviewZoom;
+        OnPropertyChanged(nameof(CurrentThemeDisplayName));
+        OnPropertyChanged(nameof(Config));
+        OnPropertyChanged(nameof(SelectedPreset));
+        OnPropertyChanged("Config.Markdown");
+        OnPropertyChanged(nameof(PreviewZoomLevel));
+        NotifyThemeToggleUi();
+        ThemeChanged?.Invoke();
     }
 
     /// <summary>当前选中的样式预设；设置时应用该预设并刷新 Config。</summary>
@@ -267,6 +300,7 @@ public sealed class MainViewModel : ViewModelBase
                     _activeDocument.CachedMarkdown = text;
                     _activeDocument.IsModified = true;
                 }
+                ScheduleAutoSaveDebounced();
             }
         }
     }
@@ -691,7 +725,8 @@ public sealed class MainViewModel : ViewModelBase
     public string ActivePaneName => _activePane == "Preview" ? "预览" : "编辑";
 
     /// <summary>状态栏缩放按钮的提示，标明当前操作的是编辑区还是预览区。</summary>
-    public string ZoomLevelToolTip => $"点击选择缩放比例（当前：{ActivePaneName}区，Ctrl+/- 随焦点切换）";
+    public string ZoomLevelToolTip =>
+        $"缩放（当前：{ActivePaneName}区）。Ctrl+/- 或 Ctrl+滚轮；鼠标在编辑区/预览区上滚轮即可，无需先点击获焦。";
 
     /// <summary>当前编码显示名（状态栏点击可选）。有当前文档时与文档一致。</summary>
     public string CurrentEncodingName
@@ -1606,6 +1641,12 @@ public sealed class MainViewModel : ViewModelBase
     public void CloseDocument(DocumentItem? doc)
     {
         if (doc is null) return;
+        StopAutoSaveTimer(doc);
+        if (ReferenceEquals(_autoSaveDebounceDoc, doc))
+        {
+            _autoSaveDebounceTimer?.Stop();
+            _autoSaveDebounceDoc = null;
+        }
         var list = _openDocuments;
         var idx = list.IndexOf(doc);
         if (idx < 0) return;
@@ -1673,6 +1714,9 @@ public sealed class MainViewModel : ViewModelBase
             if (string.IsNullOrEmpty(CurrentFilePath) && _activeDocument != null)
             {
                 var docToClose = _activeDocument;
+                StopAutoSaveTimer(docToClose);
+                _autoSaveDebounceTimer?.Stop();
+                _autoSaveDebounceDoc = null;
                 _openDocuments.Remove(docToClose);
                 docToClose.IsOpen = false;
                 OnPropertyChanged(nameof(OpenDocuments));
@@ -1709,6 +1753,9 @@ public sealed class MainViewModel : ViewModelBase
                 IsModified = false;
                 if (_activeDocument is not null)
                 {
+                    StopAutoSaveTimer(_activeDocument);
+                    _autoSaveDebounceTimer?.Stop();
+                    _autoSaveDebounceDoc = null;
                     _activeDocument.CachedMarkdown = textToSave;
                     _activeDocument.IsModified = false;
                     _activeDocument.LastKnownWriteTimeUtc = File.GetLastWriteTimeUtc(CurrentFilePath);

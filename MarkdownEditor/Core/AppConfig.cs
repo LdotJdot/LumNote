@@ -41,6 +41,8 @@ public sealed class AppConfig
                 result.Ui.EditorWidth = cfg.GetDouble("ui:editorWidth") ?? result.Ui.EditorWidth;
                 // 不再恢复窗口尺寸和状态，避免最大化/还原时尺寸异常
                 result.Ui.LayoutMode = cfg.GetString("ui:layoutMode") ?? result.Ui.LayoutMode;
+                result.Ui.AutoSaveIntervalSeconds =
+                    cfg.GetInt("ui:autoSaveIntervalSeconds") ?? result.Ui.AutoSaveIntervalSeconds;
                 result.Ui.Theme = cfg.GetString("ui:theme") ?? result.Ui.Theme;
                 result.Ui.BackgroundColor = cfg.GetString("ui:backgroundColor") ?? result.Ui.BackgroundColor;
                 result.Ui.SidebarBackground = cfg.GetString("ui:sidebarBackground") ?? result.Ui.SidebarBackground;
@@ -357,6 +359,7 @@ public sealed class AppConfig
             cfg.Set("ui:editorWidth", Ui.EditorWidth);
             // 不再持久化窗口尺寸和状态，统一交由系统窗口管理负责
             cfg.Set("ui:layoutMode", Ui.LayoutMode);
+            cfg.Set("ui:autoSaveIntervalSeconds", Ui.AutoSaveIntervalSeconds);
             cfg.Set("ui:theme", Ui.Theme);
             cfg.Set("ui:backgroundColor", Ui.BackgroundColor);
             cfg.Set("ui:sidebarBackground", Ui.SidebarBackground);
@@ -477,6 +480,8 @@ public sealed class UiConfig
     public bool SidebarCollapsed { get; set; } = false;
     public double EditorWidth { get; set; } = 1;
     public string LayoutMode { get; set; } = "Both";
+    /// <summary>自动保存间隔（秒）：0=禁用，60/300/600/1200 等。</summary>
+    public int AutoSaveIntervalSeconds { get; set; } = 0;
     /// <summary>界面主题：Dark（深色）/ Light（浅色）。</summary>
     public string Theme { get; set; } = "Dark";
     public string BackgroundColor { get; set; } = "#f6f8fa";

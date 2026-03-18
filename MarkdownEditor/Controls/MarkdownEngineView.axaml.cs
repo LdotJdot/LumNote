@@ -1,5 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 using MarkdownEditor.Core;
 using MarkdownEditor.Engine;
@@ -128,6 +130,8 @@ public partial class MarkdownEngineView : UserControl
             }
         );
 
+        AddHandler(PointerWheelChangedEvent, OnPreviewPointerWheelZoom, RoutingStrategies.Tunnel);
+
         if (Scroll != null)
         {
             Scroll.ScrollChanged += (_, _) =>
@@ -231,6 +235,22 @@ public partial class MarkdownEngineView : UserControl
     {
         if (DataContext is MainViewModel vm)
             vm.SkipEditorToPreviewScrollSync = false;
+    }
+
+    private void OnPreviewPointerWheelZoom(object? sender, PointerWheelEventArgs e)
+    {
+        if ((e.KeyModifiers & KeyModifiers.Control) == 0)
+            return;
+        if (DataContext is not MainViewModel vm)
+            return;
+        vm.ActivePane = "Preview";
+        if (e.Delta.Y > 0)
+            vm.ZoomPreviewInCommand.Execute(null);
+        else if (e.Delta.Y < 0)
+            vm.ZoomPreviewOutCommand.Execute(null);
+        else
+            return;
+        e.Handled = true;
     }
 
     /// <summary>计算两段文本的差异行区间 [firstChangedLine, lastChangedLineExclusive)，用于增量解析。无差异或全量替换时返回 (null, null)。</summary>
