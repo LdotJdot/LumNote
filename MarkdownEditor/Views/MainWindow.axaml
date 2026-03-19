@@ -4,6 +4,8 @@
         xmlns:vm="clr-namespace:MarkdownEditor.ViewModels"
         xmlns:conv="clr-namespace:MarkdownEditor.Converters"
         xmlns:core="clr-namespace:MarkdownEditor.Core"
+        xmlns:models="clr-namespace:MarkdownEditor.Models"
+        xmlns:services="clr-namespace:MarkdownEditor.Services"
         xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
         x:Class="MarkdownEditor.Views.MainWindow"
         x:Name="Root"
@@ -390,6 +392,7 @@
                     <MenuItem Header="打开所在文件夹" x:Name="FileTreeOpenFolderItem"/>
                     <MenuItem Header="复制路径" x:Name="FileTreeCopyPathItem"/>
                     <MenuItem Header="重命名" x:Name="FileTreeRenameItem"/>
+                    <MenuItem Header="时间线" x:Name="FileTreeTimelineItem"/>
                     <MenuItem Header="新建文件" x:Name="FileTreeNewFileItem"/>
                     <MenuItem Header="新建文件夹" x:Name="FileTreeNewFolderItem"/>
                     <MenuItem Header="删除" x:Name="FileTreeDeleteItem"/>
@@ -585,16 +588,82 @@
             </Grid>
           </Border>
 
-          <!-- Git -->
+          <!-- Git 版本管理（仅本地，参考 VS 简洁风格） -->
           <Border IsVisible="{Binding ShowGitPane}"
-                  Padding="12"
+                  Padding="6,8"
                   Classes="gitPane">
-            <StackPanel Spacing="8">
-              <TextBlock Text="版本管理" FontWeight="Bold"/>
-              <TextBlock Text="版本管理"
-                         FontSize="11"
-                         TextWrapping="Wrap"/>
-            </StackPanel>
+            <Grid RowDefinitions="Auto,Auto,Auto,*">
+              <StackPanel Grid.Row="0" Spacing="4">
+                <TextBlock Text="Git 更改" FontWeight="SemiBold" FontSize="12"/>
+                <StackPanel IsVisible="{Binding GitPaneViewModel.HasRepositories}" Spacing="4">
+                  <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                    <ComboBox IsVisible="{Binding GitPaneViewModel.HasMultipleRepositories}"
+                              MinWidth="80" MaxWidth="140"
+                              ItemsSource="{Binding GitPaneViewModel.Repositories}"
+                              SelectedItem="{Binding GitPaneViewModel.SelectedRepository, Mode=TwoWay}"
+                              FontSize="11">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="services:GitRepositoryInfo">
+                          <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"/>
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <Button Content="新建分支" Command="{Binding GitPaneViewModel.CreateBranchCommand}"
+                            Padding="6,2" FontSize="11"
+                            IsVisible="{Binding GitPaneViewModel.SelectedRepositoryIsInitialized}"/>
+                    <ComboBox x:Name="GitBranchComboBox"
+                              MinWidth="90" MaxWidth="160"
+                              ItemsSource="{Binding GitPaneViewModel.BranchNames}"
+                              SelectedItem="{Binding GitPaneViewModel.SelectedBranchName, Mode=TwoWay}"
+                              FontSize="11"
+                              IsVisible="{Binding GitPaneViewModel.SelectedRepositoryIsInitialized}"/>
+                    <Button Content="↻" ToolTip.Tip="刷新"
+                            Command="{Binding GitPaneViewModel.RefreshStatusCommand}"
+                            Width="22" Height="22" Padding="0" FontSize="11"
+                            IsVisible="{Binding GitPaneViewModel.SelectedRepositoryIsInitialized}"/>
+                  </StackPanel>
+                </StackPanel>
+                <TextBlock Text="打开文件夹以使用版本管理" FontSize="11" Foreground="{DynamicResource SidebarTextForeground}"
+                           Opacity="0.85"
+                           IsVisible="{Binding GitPaneViewModel.HasRepositories, Converter={x:Static conv:InverseBoolConverter.Instance}}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="1" Margin="0,6,0,0" Spacing="4"
+                         IsVisible="{Binding GitPaneViewModel.ShowInitRepositoryPanel}">
+                <TextBlock Text="此文件夹下尚无 Git 仓库。" FontSize="11" TextWrapping="Wrap"/>
+                <Button Content="初始化 Git 仓库" Command="{Binding GitPaneViewModel.InitRepositoryCommand}"
+                        Padding="8,4" FontSize="11"/>
+                <TextBlock Text="{Binding GitPaneViewModel.StatusMessage}" FontSize="10" Opacity="0.8"/>
+              </StackPanel>
+              <StackPanel Grid.Row="2" Margin="0,6,0,0" Spacing="4" IsVisible="{Binding GitPaneViewModel.SelectedRepositoryIsInitialized}">
+                <TextBox Text="{Binding GitPaneViewModel.CommitMessage, Mode=TwoWay}"
+                         Watermark="提交说明"
+                         FontSize="11" Padding="6,6" MinHeight="36" AcceptsReturn="True"/>
+                <Button Content="提交修改" Command="{Binding GitPaneViewModel.CommitCommand}"
+                        Padding="8,4" FontSize="11"
+                        ToolTip.Tip="智能提交：自动暂存所有更改后提交"/>
+                <TextBlock Text="{Binding GitPaneViewModel.StatusMessage}" FontSize="10" Opacity="0.8"/>
+              </StackPanel>
+              <Grid Grid.Row="3" RowDefinitions="*" IsVisible="{Binding GitPaneViewModel.SelectedRepositoryIsInitialized}" Margin="0,6,0,0">
+                <ScrollViewer Grid.Row="0" MaxHeight="200" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              Background="Transparent">
+                  <ListBox x:Name="GitChangesListBox"
+                           ItemsSource="{Binding GitPaneViewModel.Changes}"
+                           SelectedItem="{Binding GitPaneViewModel.SelectedChangeItem, Mode=TwoWay}"
+                           Background="Transparent" BorderThickness="0" Padding="0" MinHeight="0"
+                           SelectionMode="Single">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="models:GitChangeItem">
+                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,1">
+                          <TextBlock Text="{Binding StatusLetter}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"
+                                     Foreground="{Binding StatusLetter, Converter={x:Static conv:GitStatusLetterToBrushConverter.Instance}}" MinWidth="14"/>
+                          <TextBlock Text="{Binding RelativePath}" FontSize="11" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                        </StackPanel>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                </ScrollViewer>
+              </Grid>
+            </Grid>
           </Border>
 
           <!-- 设置 -->
@@ -890,10 +959,17 @@
 
           <Grid x:Name="EditorPaneGrid"
                 Grid.Column="0"
-                RowDefinitions="*"
+                RowDefinitions="Auto,*"
                 Classes="editorPane">
+            <Border Grid.Row="0" Padding="6,4" Background="{DynamicResource TabBarBackground}"
+                    IsVisible="{Binding IsDiffCompareActive}">
+              <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <TextBlock Text="与版本比对中" FontSize="11" VerticalAlignment="Center"/>
+                <Button Content="退出比对" Command="{Binding ExitCompareCommand}" Padding="6,2" FontSize="11"/>
+              </StackPanel>
+            </Border>
             <ae:TextEditor x:Name="EditorTextBox"
-                           Grid.Row="0"
+                           Grid.Row="1"
                            x:CompileBindings="False"
                            ShowLineNumbers="True"
                            HorizontalScrollBarVisibility="Auto"
@@ -919,6 +995,8 @@
                   <MenuItem Header="插入图片…" x:Name="EditorContextInsertImage"/>
                   <MenuItem Header="-"/>
                   <MenuItem Header="列选择：Alt+拖拽" x:Name="EditorContextColumnSelectHint" IsEnabled="False"/>
+                  <MenuItem Header="-"/>
+                  <MenuItem Header="关闭比对" x:Name="EditorContextExitCompare"/>
                 </MenuFlyout>
               </Control.ContextFlyout>
             </ae:TextEditor>

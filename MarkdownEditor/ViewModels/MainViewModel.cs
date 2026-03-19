@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using LumConfig;
+using MarkdownEditor;
 using MarkdownEditor.Controls;
 using System.Collections;
 using System.Collections.Generic;
@@ -136,7 +137,11 @@ public sealed partial class MainViewModel : ViewModelBase
         }
         LoadRecentFoldersFromDisk(_recentFolderPaths);
         _ = InitializeRecentFilesAsync();
+        _gitPaneViewModel = new GitPaneViewModel(GetWorkspaceFolderPaths);
     }
+
+    /// <summary>版本管理面板 ViewModel（仓库选择、变更列表、暂存、提交、分支、拉取/推送）。</summary>
+    public GitPaneViewModel GitPaneViewModel => _gitPaneViewModel;
 
     /// <summary>退出时由视图调用，确保最近列表已持久化。</summary>
     public void SaveRecentState()
@@ -195,6 +200,8 @@ public sealed partial class MainViewModel : ViewModelBase
     private DispatcherTimer? _searchLoadingDotsTimer;
     private string _searchLoadingDots = ".";
 
+    private readonly GitPaneViewModel _gitPaneViewModel;
+
     /// <summary>无文档时编辑区默认缩放。</summary>
     private double _editorZoomLevel = 1.0;
     /// <summary>无文档时预览区默认缩放（与 Config 同步）。</summary>
@@ -217,6 +224,9 @@ public sealed partial class MainViewModel : ViewModelBase
 
     /// <summary>是否有工作区打开（至少一个根目录）。</summary>
     public bool HasWorkspaceOpen => _workspaceFolderPaths.Count > 0;
+
+    /// <summary>工作区根目录列表的只读副本（供版本管理面板等使用）。</summary>
+    public IReadOnlyList<string> GetWorkspaceFolderPaths() => _workspaceFolderPaths.ToList();
 
     /// <summary>未打开工作区时在文件夹浏览区显示“打开工作区/打开文件夹”占位。</summary>
     public bool ShowWorkspacePlaceholder => !HasWorkspaceOpen;
@@ -1248,6 +1258,7 @@ public sealed partial class MainViewModel : ViewModelBase
         FilterDocuments();
         PushRecentFolder(path);
         NotifyWelcomeViewChanged();
+        _gitPaneViewModel.RefreshRepositories();
     }
 
     /// <summary>添加多个文件夹到工作区；新根默认折叠。</summary>
@@ -1274,6 +1285,7 @@ public sealed partial class MainViewModel : ViewModelBase
         BuildFileTreeFromWorkspace();
         FilterDocuments();
         NotifyWelcomeViewChanged();
+        _gitPaneViewModel.RefreshRepositories();
     }
 
     /// <summary>关闭所有文档并清空缓存，然后加载指定工作区根目录列表并重建文件树（每个根默认折叠）。</summary>
@@ -1294,6 +1306,7 @@ public sealed partial class MainViewModel : ViewModelBase
         BuildFileTreeFromWorkspace();
         FilterDocuments();
         NotifyWelcomeViewChanged();
+        _gitPaneViewModel.RefreshRepositories();
     }
 
     /// <summary>关闭所有已打开文档并清空内容缓存（工作区切换时调用）。</summary>
@@ -1707,7 +1720,10 @@ public sealed partial class MainViewModel : ViewModelBase
         try
         {
             var enc = _activeDocument != null ? GetEncodingByName(_activeDocument.EncodingName) : Encoding.UTF8;
-            var textToSave = NormalizeOrderedLists(_currentMarkdown);
+            var raw = _currentMarkdown ?? "";
+            if (Services.DiffVirtualLineHelper.ContainsVirtualLines(raw))
+                raw = Services.DiffVirtualLineHelper.RemoveVirtualLines(raw);
+            var textToSave = NormalizeOrderedLists(raw);
             _currentMarkdown = textToSave;
             OnPropertyChanged(nameof(CurrentMarkdown));
             File.WriteAllText(path, textToSave, enc);
@@ -1746,7 +1762,10 @@ public sealed partial class MainViewModel : ViewModelBase
             if (!string.IsNullOrEmpty(CurrentFilePath))
             {
                 var enc = _activeDocument != null ? GetEncodingByName(_activeDocument.EncodingName) : Encoding.UTF8;
-                var textToSave = NormalizeOrderedLists(_currentMarkdown);
+                var raw = _currentMarkdown ?? "";
+                if (Services.DiffVirtualLineHelper.ContainsVirtualLines(raw))
+                    raw = Services.DiffVirtualLineHelper.RemoveVirtualLines(raw);
+                var textToSave = NormalizeOrderedLists(raw);
                 _currentMarkdown = textToSave;
                 OnPropertyChanged(nameof(CurrentMarkdown));
                 File.WriteAllText(CurrentFilePath, textToSave, enc);
@@ -1773,7 +1792,83 @@ public sealed partial class MainViewModel : ViewModelBase
     public void OpenDocument(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
-        LoadDocument(path);        
+        LoadDocument(path);
+    }
+
+    /// <summary>与指定 Git 提交比对：进入编辑区 diff 模式，对比源为该文件在 commitSha 时的内容。由 Timeline“与当前比对”触发。</summary>
+    public void EnterCompareWithCommit(string filePath, string commitSha)
+    {
+        _diffCompareFilePath = filePath;
+        _diffCompareCommitSha = commitSha;
+        OnPropertyChanged(nameof(DiffCompareFilePath));
+        OnPropertyChanged(nameof(DiffCompareCommitSha));
+        OnPropertyChanged(nameof(IsDiffCompareActive));
+    }
+
+    /// <summary>退出与 Git 版本的比对，恢复普通编辑；若当前内容含虚拟行则先剥离再清空比对状态。</summary>
+    public void ExitCompareWithCommit()
+    {
+        if (Services.DiffVirtualLineHelper.ContainsVirtualLines(CurrentMarkdown))
+            CurrentMarkdown = Services.DiffVirtualLineHelper.RemoveVirtualLines(CurrentMarkdown ?? "");
+        _diffCompareFilePath = null;
+        _diffCompareCommitSha = null;
+        _currentDiffLineMap = null;
+        OnPropertyChanged(nameof(DiffCompareFilePath));
+        OnPropertyChanged(nameof(DiffCompareCommitSha));
+        OnPropertyChanged(nameof(IsDiffCompareActive));
+        OnPropertyChanged(nameof(CurrentDiffLineMap));
+    }
+
+    private string? _diffCompareFilePath;
+    private string? _diffCompareCommitSha;
+
+    /// <summary>当前 diff 对比的文件路径（与某次提交比对时非空）。</summary>
+    public string? DiffCompareFilePath => _diffCompareFilePath;
+
+    /// <summary>当前 diff 对比的提交 Sha（与某次提交比对时非空）。</summary>
+    public string? DiffCompareCommitSha => _diffCompareCommitSha;
+
+    /// <summary>是否处于“与 Git 版本比对”模式。</summary>
+    public bool IsDiffCompareActive => !string.IsNullOrEmpty(_diffCompareFilePath) && !string.IsNullOrEmpty(_diffCompareCommitSha);
+
+    /// <summary>退出比对模式（供编辑区“退出比对”按钮绑定）。</summary>
+    public ICommand ExitCompareCommand => new RelayCommand(ExitCompareWithCommit);
+
+    private Models.GitDiffLineMap? _currentDiffLineMap;
+
+    /// <summary>当前编辑区 diff 行映射（与 Git 版本比对时由视图调用 <see cref="UpdateDiffLineMap"/> 更新）。</summary>
+    public Models.GitDiffLineMap? CurrentDiffLineMap => _currentDiffLineMap;
+
+    /// <summary>根据当前编辑器内容与 <see cref="DiffCompareFilePath"/>、<see cref="DiffCompareCommitSha"/> 更新 diff 行映射；仅在 <see cref="IsDiffCompareActive"/> 时有效。</summary>
+    public void UpdateDiffLineMap(string? currentEditorContent)
+    {
+        if (!IsDiffCompareActive || string.IsNullOrEmpty(_diffCompareFilePath) || string.IsNullOrEmpty(_diffCompareCommitSha)) return;
+        var repoRoot = Services.GitService.FindRepositoryRootForPath(_diffCompareFilePath);
+        if (string.IsNullOrEmpty(repoRoot)) return;
+        _currentDiffLineMap = Services.GitService.GetDiffLineMap(repoRoot, _diffCompareFilePath, currentEditorContent ?? "", _diffCompareCommitSha);
+        OnPropertyChanged(nameof(CurrentDiffLineMap));
+    }
+
+    /// <summary>在已进入比对的前提下，将“真实内容”插入虚拟行并设为当前文档，同时用扩展行映射替换 CurrentDiffLineMap，便于错开显示已删除行（无反射）。</summary>
+    public void ApplyVirtualLinesForCompare(string realContent)
+    {
+        // #region agent log
+        DebugLog.Write("A", "MainViewModel.ApplyVirtualLinesForCompare.entry", "ApplyVirtualLinesForCompare", new { realLen = realContent?.Length ?? 0, isDiffActive = IsDiffCompareActive });
+        // #endregion
+        if (!IsDiffCompareActive || string.IsNullOrEmpty(realContent)) return;
+        UpdateDiffLineMap(realContent);
+        // #region agent log
+        var deletedCount = _currentDiffLineMap?.DeletedLines.Count ?? 0;
+        DebugLog.Write("B", "MainViewModel.ApplyVirtualLinesForCompare.afterUpdate", "After UpdateDiffLineMap", new { deletedCount, mapNull = _currentDiffLineMap == null });
+        // #endregion
+        if (_currentDiffLineMap == null || _currentDiffLineMap.DeletedLines.Count == 0) return;
+        var (displayContent, extendedMap) = Services.DiffVirtualLineHelper.BuildDisplayWithVirtualLines(realContent, _currentDiffLineMap);
+        // #region agent log
+        DebugLog.Write("E", "MainViewModel.ApplyVirtualLinesForCompare.afterBuild", "After BuildDisplay", new { displayLen = displayContent?.Length ?? 0, hasVirtual = Services.DiffVirtualLineHelper.ContainsVirtualLines(displayContent) });
+        // #endregion
+        CurrentMarkdown = displayContent;
+        _currentDiffLineMap = extendedMap;
+        OnPropertyChanged(nameof(CurrentDiffLineMap));
     }
 
     /// <summary>在指定目录下新建子文件夹并刷新树。返回新文件夹路径，失败返回 null。</summary>
@@ -2081,6 +2176,8 @@ public sealed partial class MainViewModel : ViewModelBase
 
     private void LoadDocument(string path)
     {
+        if (IsDiffCompareActive && !string.Equals(path, _diffCompareFilePath, StringComparison.OrdinalIgnoreCase))
+            ExitCompareWithCommit();
         if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
             PushRecentFile(path);
 
@@ -2134,6 +2231,12 @@ public sealed partial class MainViewModel : ViewModelBase
                     {
                         _currentMarkdown = text;
                         _isModified = false;
+                        // #region agent log
+                        var pathMatch = IsDiffCompareActive && string.Equals(_diffCompareFilePath, docRef.FullPath, StringComparison.OrdinalIgnoreCase);
+                        DebugLog.Write("D", "MainViewModel.LoadDocument.async", "Async load done", new { pathMatch, textLen = text?.Length ?? 0, diffPath = _diffCompareFilePath, docPath = docRef.FullPath });
+                        // #endregion
+                        if (IsDiffCompareActive && string.Equals(_diffCompareFilePath, docRef.FullPath, StringComparison.OrdinalIgnoreCase))
+                            ApplyVirtualLinesForCompare(text);
                         OnPropertyChanged(nameof(CurrentMarkdown));
                         OnPropertyChanged(nameof(IsModified));
                     }

@@ -45,6 +45,8 @@ public static class UiStyleApplier
         Set(resources, "SplitterBorderBrush", style.SplitterBorderBrush);
         Set(resources, "ListBoxItemSelectedBackground", style.ListBoxItemSelectedBackground);
         Set(resources, "ListBoxItemSelectedForeground", style.ListBoxItemSelectedForeground);
+        Set(resources, "DiffAddedBackground", style.DiffAddedBackground);
+        Set(resources, "DiffRemovedBackground", style.DiffRemovedBackground);
     }
 
     private static void Set(IResourceDictionary resources, string key, string colorString)

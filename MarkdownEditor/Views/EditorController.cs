@@ -7,6 +7,8 @@ using Avalonia.VisualTree;
 using AvaloniaEdit;
 using AvaloniaEdit.Search;
 using AvaloniaEdit.Rendering;
+using MarkdownEditor;
+using MarkdownEditor.Controls;
 using MarkdownEditor.Engine.Highlighting;
 using MarkdownEditor.ViewModels;
 
@@ -45,6 +47,10 @@ internal sealed class EditorController
 
     /// <summary>下一次光标位置变化是否跳过历史记录（用于程序化导航，例如 Alt+Back/Forward、搜索结果跳转等）。</summary>
     private bool _suppressNextHistoryRecord;
+
+    private DiffBackgroundRenderer? _diffBackgroundRenderer;
+    private DiffGutterMargin? _diffGutterMargin;
+    private DiffLineNumberMargin? _diffLineNumberMargin;
 
     public EditorController(TextEditor editor, MainViewModel viewModel)
     {
@@ -154,14 +160,24 @@ internal sealed class EditorController
         {
             if (e.PropertyName == nameof(MainViewModel.CurrentMarkdown))
             {
+                var target = _viewModel.CurrentMarkdown ?? string.Empty;
+                // #region agent log
+                var hasVirtual = MarkdownEditor.Services.DiffVirtualLineHelper.ContainsVirtualLines(target);
+                var skip = _currentMarkdownChangeFromEditor && !hasVirtual;
+                DebugLog.Write("C", "EditorController.PropertyChanged", "CurrentMarkdown changed", new { targetLen = target.Length, fromEditor = _currentMarkdownChangeFromEditor, hasVirtual, skip });
+                // #endregion
                 if (_currentMarkdownChangeFromEditor)
                 {
                     _currentMarkdownChangeFromEditor = false;
-                    return;
+                    if (!hasVirtual)
+                        return;
                 }
 
-                var target = _viewModel.CurrentMarkdown ?? string.Empty;
-                if (!string.Equals(_editor.Text, target, StringComparison.Ordinal))
+                var willSet = !string.Equals(_editor.Text, target, StringComparison.Ordinal);
+                // #region agent log
+                if (willSet) DebugLog.Write("C", "EditorController.PropertyChanged.set", "Setting editor.Text", new { targetLen = target.Length });
+                // #endregion
+                if (willSet)
                 {
                     var caret = _editor.TextArea.Caret.Offset;
                     _editor.Text = target;
@@ -193,6 +209,11 @@ internal sealed class EditorController
             {
                 _currentMarkdownChangeFromEditor = true;
                 _viewModel.CurrentMarkdown = text;
+            }
+
+            if (_viewModel.IsDiffCompareActive)
+            {
+                try { _editor.TextArea.TextView.Redraw(); } catch (VisualLinesInvalidException) { }
             }
 
             // 文本已变化，下一次高亮需要强制重算当前窗口（避免使用旧 token）。
@@ -279,6 +300,49 @@ internal sealed class EditorController
         {
             // 矩形选择非核心功能，个别版本若无此属性则静默忽略。
         }
+    }
+
+    /// <summary>开启或关闭编辑区 diff 背景（与 Git 版本比对）。getLineMap 为 null 时移除渲染器。addedBrush/removedBrush 为 null 时使用内置默认色。行号区左侧会显示 +/- 符号。</summary>
+    internal void SetDiffMode(Func<MarkdownEditor.Models.GitDiffLineMap?>? getLineMap, Avalonia.Media.IBrush? addedBrush = null, Avalonia.Media.IBrush? removedBrush = null)
+    {
+        var textArea = _editor.TextArea;
+        var textView = textArea?.TextView;
+        if (textView == null) return;
+
+        if (_diffBackgroundRenderer != null)
+        {
+            textView.BackgroundRenderers.Remove(_diffBackgroundRenderer);
+            _diffBackgroundRenderer = null;
+        }
+        if (_diffGutterMargin != null && textArea != null)
+        {
+            _diffGutterMargin.RemoveFromTextView(textView);
+            textArea.LeftMargins.Remove(_diffGutterMargin);
+            _diffGutterMargin = null;
+        }
+        if (_diffLineNumberMargin != null && textArea != null)
+        {
+            _diffLineNumberMargin.RemoveFromTextView(textView);
+            textArea.LeftMargins.Remove(_diffLineNumberMargin);
+            _diffLineNumberMargin = null;
+        }
+        if (getLineMap != null)
+        {
+            _editor.ShowLineNumbers = false;
+            _diffBackgroundRenderer = new DiffBackgroundRenderer(getLineMap, addedBrush, removedBrush);
+            textView.BackgroundRenderers.Add(_diffBackgroundRenderer);
+            _diffGutterMargin = new DiffGutterMargin(getLineMap);
+            _diffGutterMargin.AddToTextView(textView);
+            textArea!.LeftMargins.Insert(0, _diffGutterMargin);
+            _diffLineNumberMargin = new DiffLineNumberMargin();
+            _diffLineNumberMargin.AddToTextView(textView);
+            textArea.LeftMargins.Insert(1, _diffLineNumberMargin);
+        }
+        else
+        {
+            _editor.ShowLineNumbers = true;
+        }
+        try { textView.Redraw(); } catch (VisualLinesInvalidException) { }
     }
 
     /// <summary>供窗口在执行程序化导航前调用，确保下一次光标变化不会被记录到 Alt+Left/Right 历史中。</summary>

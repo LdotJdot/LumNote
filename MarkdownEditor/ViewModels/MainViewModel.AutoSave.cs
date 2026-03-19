@@ -143,7 +143,10 @@ public sealed partial class MainViewModel
         if (string.IsNullOrEmpty(path) || IsPreviewableImagePath(path))
             return;
 
-        var text = NormalizeOrderedLists(GetDocumentTextForAutoSave(doc));
+        var raw = GetDocumentTextForAutoSave(doc);
+        if (Services.DiffVirtualLineHelper.ContainsVirtualLines(raw))
+            raw = Services.DiffVirtualLineHelper.RemoveVirtualLines(raw);
+        var text = NormalizeOrderedLists(raw);
 
         try
         {

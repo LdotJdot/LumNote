@@ -16,6 +16,7 @@ using Avalonia.Threading;
 using AvaloniaEdit;
 using AvaloniaEdit.Document;
 using AvaloniaEdit.Search;
+using MarkdownEditor;
 using MarkdownEditor.ViewModels;
 using MarkdownEditor.Engine.Highlighting;
 using MarkdownEditor.Export;
@@ -189,7 +190,12 @@ public partial class MainWindow : Window
 
         ActivityExplorerButton.Click += (_, _) => vm.IsExplorerActive = true;
         ActivitySearchButton.Click += (_, _) => vm.IsSearchActive = true;
-        ActivityGitButton.Click += (_, _) => vm.IsGitActive = true;
+        ActivityGitButton.Click += (_, _) =>
+        {
+            vm.IsGitActive = true;
+            vm.GitPaneViewModel.RefreshRepositories();
+            vm.GitPaneViewModel.TimelineFilePath = vm.CurrentFilePath;
+        };
         ActivitySettingsButton.Click += (_, _) => vm.IsSettingsActive = true;
         UpdateActivityBarHighlight(vm);
 
@@ -200,6 +206,7 @@ public partial class MainWindow : Window
         if (NewDocumentTabButton != null)
             NewDocumentTabButton.Click += (_, _) => vm.NewDocument();
         SetupSearchResultsNavigation(vm);
+        SetupGitPane(vm);
         Closed += (_, _) =>
         {
             try
@@ -706,6 +713,36 @@ public partial class MainWindow : Window
             FileTreeNewFileItem.IsEnabled = hasNode;
             FileTreeNewFolderItem.IsEnabled = hasNode;
             FileTreeDeleteItem.IsEnabled = hasNode && (node is { IsFolder: false } || (node!.IsFolder && !vm.IsWorkspaceRoot(node.FullPath)));
+            if (FileTreeTimelineItem != null)
+            {
+                var isFile = node is { IsFolder: false };
+                FileTreeTimelineItem.IsVisible = isFile;
+                if (isFile && node != null)
+                {
+                    vm.GitPaneViewModel.TimelineFilePath = node.FullPath;
+                    FileTreeTimelineItem.Items.Clear();
+                    foreach (var c in vm.GitPaneViewModel.FileHistory)
+                    {
+                        var commit = c;
+                        var path = node.FullPath;
+                        var mi = new MenuItem { Header = $"{c.MessageShort} — {c.ShaShort}" };
+                        mi.Click += (_, _) =>
+                        {
+                            vm.OpenDocument(path);
+                            vm.EnterCompareWithCommit(path, commit.Sha);
+                            Dispatcher.UIThread.Post(() =>
+                            {
+                                var editorText = EditorTextBox is TextEditor ed ? ed.Document?.Text ?? "" : "";
+                                vm.UpdateDiffLineMap(editorText);
+                                var addedBrush = GetDiffBrushFromResources("DiffAddedBackground");
+                                var removedBrush = GetDiffBrushFromResources("DiffRemovedBackground");
+                                _editorController.SetDiffMode(() => vm.CurrentDiffLineMap, addedBrush, removedBrush);
+                            }, DispatcherPriority.Loaded);
+                        };
+                        FileTreeTimelineItem.Items.Add(mi);
+                    }
+                }
+            }
         }
 
         if (FileTreeList?.ContextFlyout is MenuFlyout flyout)
@@ -997,6 +1034,14 @@ public partial class MainWindow : Window
             // 渲染区主题（Markdown 样式预设）切换后，立即将最新样式应用到预览控件
             PreviewEngine.StyleConfig = vm.Config.Markdown;
         }
+        else if (e.PropertyName == nameof(MainViewModel.CurrentFilePath))
+        {
+            vm.GitPaneViewModel.TimelineFilePath = vm.CurrentFilePath;
+        }
+        else if (e.PropertyName == nameof(MainViewModel.IsDiffCompareActive) && !vm.IsDiffCompareActive)
+        {
+            _editorController.SetDiffMode(null);
+        }
     }
 
     private void UpdateActivityBarHighlight(MainViewModel vm)
@@ -1021,6 +1066,11 @@ public partial class MainWindow : Window
         EditorContextSelectAll.Click += (_, _) => EditorSelectAll();
         EditorContextInsertLink.Click += async (_, _) => await EditorInsertMarkdownResourceAsync(vm, isImage: false);
         EditorContextInsertImage.Click += async (_, _) => await EditorInsertMarkdownResourceAsync(vm, isImage: true);
+        EditorContextExitCompare.Click += (_, _) =>
+        {
+            if (DataContext is MainViewModel m)
+                m.ExitCompareWithCommit();
+        };
 
         if (EditorTextBox.ContextFlyout is MenuFlyout editorFlyout)
         {
@@ -1032,6 +1082,7 @@ public partial class MainWindow : Window
                 EditorContextCopy.IsEnabled = hasSelection;
                 EditorContextUndo.IsEnabled = editor.Document?.UndoStack?.CanUndo ?? false;
                 EditorContextRedo.IsEnabled = editor.Document?.UndoStack?.CanRedo ?? false;
+                EditorContextExitCompare.IsVisible = vm.IsDiffCompareActive;
                 _ = UpdateEditorPasteEnabledAsync();
             };
         }
@@ -2063,6 +2114,123 @@ public partial class MainWindow : Window
                 vm.RecordLocation(vm.CurrentFilePath ?? "", ed.TextArea.Caret.Offset);
             NavigateToSearchResult(vm.SelectedSearchResult);
         };
+    }
+
+    private void SetupGitPane(MainViewModel vm)
+    {
+        var gitVm = vm.GitPaneViewModel;
+        gitVm.CredentialsProvider = (url, usernameFromUrl) =>
+            Dispatcher.UIThread.Invoke(() => ShowGitCredentialsDialog(this, url, usernameFromUrl));
+        gitVm.CreateBranchRequested += async (_, repoPath) =>
+        {
+            var win = new GitCreateBranchWindow();
+            await win.ShowDialog(this);
+            var name = win.BranchName;
+            if (string.IsNullOrWhiteSpace(name)) return;
+            var (success, error) = Services.GitService.CreateBranchAndCheckout(repoPath, name);
+            if (success)
+                gitVm.RefreshStatus();
+            else
+                gitVm.StatusMessage = error;
+        };
+        if (GitChangesListBox != null)
+            GitChangesListBox.SelectionChanged += GitChangesListBox_OnSelectionChanged;
+    }
+
+    private void GitChangesListBox_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm || e.AddedItems?.Count is not 1) return;
+        if (e.AddedItems[0] is not Models.GitChangeItem item || string.IsNullOrEmpty(item.FullPath)) return;
+        var path = item.FullPath;
+        vm.EnterCompareWithCommit(path, "HEAD");
+        vm.OpenDocument(path);
+        var retryCount = 0;
+        const int maxRetries = 3;
+        void ApplyAndSetDiff()
+        {
+            var realContent = vm.CurrentMarkdown ?? (EditorTextBox is TextEditor e ? e.Document?.Text ?? "" : "");
+            // #region agent log
+            DebugLog.Write("A", "MainWindow.ApplyAndSetDiff.entry", "ApplyAndSetDiff", new { realLen = realContent?.Length ?? 0, retry = retryCount });
+            // #endregion
+            if (string.IsNullOrEmpty(realContent) && retryCount < maxRetries)
+            {
+                retryCount++;
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150 * retryCount) };
+                timer.Tick += (_, _) =>
+                {
+                    timer.Stop();
+                    ApplyAndSetDiff();
+                };
+                timer.Start();
+                return;
+            }
+            vm.ApplyVirtualLinesForCompare(realContent);
+            var displayContent = vm.CurrentMarkdown ?? "";
+            var forceSet = EditorTextBox is TextEditor editor && editor.Document != null && displayContent.Length > 0 && editor.Document.Text != displayContent;
+            // #region agent log
+            DebugLog.Write("C", "MainWindow.ApplyAndSetDiff.afterApply", "After Apply", new { displayLen = displayContent?.Length ?? 0, hasVirtual = MarkdownEditor.Services.DiffVirtualLineHelper.ContainsVirtualLines(displayContent), forceSet });
+            // #endregion
+            if (forceSet && EditorTextBox is TextEditor ed0 && ed0.Document != null)
+                ed0.Text = displayContent;
+            var addedBrush = GetDiffBrushFromResources("DiffAddedBackground");
+            var removedBrush = GetDiffBrushFromResources("DiffRemovedBackground");
+            _editorController.SetDiffMode(() => vm.CurrentDiffLineMap, addedBrush, removedBrush);
+            if (EditorTextBox is TextEditor ed)
+            {
+                try { ed.TextArea?.TextView.Redraw(); } catch { }
+            }
+        }
+        Dispatcher.UIThread.Post(ApplyAndSetDiff, DispatcherPriority.Loaded);
+    }
+
+    private static (string? username, string? password)? ShowGitCredentialsDialog(Window owner, string? url, string? usernameFromUrl)
+    {
+        return Dispatcher.UIThread.Invoke<(string? username, string? password)?>(() =>
+        {
+            var win = new GitCredentialsWindow();
+            win.SetMessage(string.IsNullOrEmpty(url) ? "请输入用户名和密码（或 Token）。" : $"认证：{url}");
+            win.SetUsernameFromUrl(usernameFromUrl);
+            win.ShowDialog(owner).GetAwaiter().GetResult();
+            return win.DidConfirm ? (win.Username, win.Password) : null;
+        });
+    }
+
+    private static IBrush? GetDiffBrushFromResources(string key)
+    {
+        var resources = Application.Current?.Resources;
+        if (resources == null) return null;
+        if (resources.TryGetResource(key, null, out var value) && value is IBrush brush)
+            return brush;
+        return null;
+    }
+
+    private void GitTimelineCommit_OnClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm || sender is not Control c || c.DataContext is not Models.GitCommitItem commit)
+            return;
+        var filePath = vm.GitPaneViewModel.TimelineFilePath;
+        if (string.IsNullOrEmpty(filePath)) return;
+        var repoRoot = Services.GitService.FindRepositoryRootForPath(filePath);
+        if (string.IsNullOrEmpty(repoRoot)) return;
+        var content = Services.GitService.GetFileContentAtCommit(repoRoot, filePath, commit.Sha);
+        var win = new TimelineViewWindow();
+        win.SetContent(content, commit.Sha, filePath, commit.MessageShort);
+        win.SetCompareWithCurrentAction(() =>
+        {
+            win.Close();
+            vm.EnterCompareWithCommit(filePath, commit.Sha);
+            var realContent = vm.CurrentMarkdown ?? (EditorTextBox is TextEditor ed ? ed.Document?.Text ?? "" : "");
+            vm.ApplyVirtualLinesForCompare(realContent);
+            var displayContent = vm.CurrentMarkdown ?? "";
+            if (EditorTextBox is TextEditor editor && editor.Document != null && displayContent.Length > 0 && editor.Document.Text != displayContent)
+                editor.Text = displayContent;
+            var addedBrush = GetDiffBrushFromResources("DiffAddedBackground");
+            var removedBrush = GetDiffBrushFromResources("DiffRemovedBackground");
+            _editorController.SetDiffMode(() => vm.CurrentDiffLineMap, addedBrush, removedBrush);
+            if (EditorTextBox is TextEditor ed2)
+            { try { ed2.TextArea?.TextView.Redraw(); } catch { } }
+        });
+        _ = win.ShowDialog(this);
     }
 
     private void SearchResultFileHeader_OnClick(object? sender, RoutedEventArgs e)

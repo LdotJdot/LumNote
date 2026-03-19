@@ -305,6 +305,8 @@ public sealed class AppConfig
         style.SplitterBorderBrush = cfg.GetString($"{prefix}:splitterBorderBrush") ?? style.SplitterBorderBrush;
         style.ListBoxItemSelectedBackground = cfg.GetString($"{prefix}:listBoxItemSelectedBackground") ?? style.ListBoxItemSelectedBackground;
         style.ListBoxItemSelectedForeground = cfg.GetString($"{prefix}:listBoxItemSelectedForeground") ?? style.ListBoxItemSelectedForeground;
+        style.DiffAddedBackground = cfg.GetString($"{prefix}:diffAddedBackground") ?? style.DiffAddedBackground;
+        style.DiffRemovedBackground = cfg.GetString($"{prefix}:diffRemovedBackground") ?? style.DiffRemovedBackground;
     }
 
     private static void SaveUiStyleToCfg(LumConfigManager cfg, string prefix, UiStyleColors style)
@@ -342,6 +344,8 @@ public sealed class AppConfig
         cfg.Set($"{prefix}:splitterBorderBrush", style.SplitterBorderBrush);
         cfg.Set($"{prefix}:listBoxItemSelectedBackground", style.ListBoxItemSelectedBackground);
         cfg.Set($"{prefix}:listBoxItemSelectedForeground", style.ListBoxItemSelectedForeground);
+        cfg.Set($"{prefix}:diffAddedBackground", style.DiffAddedBackground);
+        cfg.Set($"{prefix}:diffRemovedBackground", style.DiffRemovedBackground);
     }
 
     public void Save(string path)
@@ -471,6 +475,10 @@ public sealed class UiStyleColors
     public string SplitterBorderBrush { get; set; } = "#3f3f46";
     public string ListBoxItemSelectedBackground { get; set; } = "#094771";
     public string ListBoxItemSelectedForeground { get; set; } = "White";
+    /// <summary>编辑区 diff 新增行背景色（半透明绿）。</summary>
+    public string DiffAddedBackground { get; set; } = "#4000C000";
+    /// <summary>编辑区 diff 删除/修改行背景色（半透明红）。</summary>
+    public string DiffRemovedBackground { get; set; } = "#50C00000";
 }
 
 public sealed class UiConfig
@@ -531,6 +539,8 @@ public sealed class UiConfig
             SplitterBorderBrush = "#3f3f46",
             ListBoxItemSelectedBackground = "#094771",
             ListBoxItemSelectedForeground = "White",
+            DiffAddedBackground = "#4000C000",
+            DiffRemovedBackground = "#50C00000",
         };
     }
 
@@ -571,6 +581,8 @@ public sealed class UiConfig
             SplitterBorderBrush = "#d0d7de",
             ListBoxItemSelectedBackground = "#b6d7ff",
             ListBoxItemSelectedForeground = "#24292f",
+            DiffAddedBackground = "#40008800",
+            DiffRemovedBackground = "#50880000",
         };
     }
 }

@@ -1,0 +1,25 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+        x:Class="MarkdownEditor.Views.TimelineViewWindow"
+        Title="历史版本"
+        Width="700"
+        Height="500"
+        MinWidth="400"
+        MinHeight="300"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource ContentBackground}">
+  <Grid RowDefinitions="Auto,*">
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="8">
+      <TextBlock x:Name="TitleText" Text="历史版本内容" FontSize="12" VerticalAlignment="Center"/>
+      <Button x:Name="CompareWithCurrentButton" Content="与当前比对" Padding="8,4"/>
+    </StackPanel>
+    <ae:TextEditor x:Name="ContentEditor"
+                   Grid.Row="1"
+                   IsReadOnly="True"
+                   WordWrap="True"
+                   FontFamily="Consolas,Cascadia Code,monospace"
+                   FontSize="13"
+                   Margin="8,0,8,8"/>
+  </Grid>
+</Window>
