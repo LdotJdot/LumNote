@@ -454,6 +454,7 @@
                                  IsVisible="{Binding ShowLabel}"/>
                       <TextBox Text="{Binding EditName, Mode=TwoWay}"
                                IsVisible="{Binding IsRenaming}"
+                               AcceptsReturn="False"
                                MinWidth="80"
                                Height="22"
                                FontSize="12"
@@ -834,33 +835,47 @@
           </ScrollViewer>
         </Border>
 
-        <!-- 文档标签页（右侧上方），有文档时显示 -->
+        <!-- 文档标签页（右侧上方），有文档时显示；左侧固定「+」新文档按钮 -->
         <Border Grid.Row="0"
                 IsVisible="{Binding ShowEditorView}"
                 BorderThickness="0"
                 Classes="tabBarBorder">
-          <TabControl x:Name="DocumentTabControl"
-                      ItemsSource="{Binding OpenDocuments}"
-                      SelectedItem="{Binding ActiveDocument, Mode=TwoWay}"
-                      Margin="4,2,0,0"
-                      HorizontalAlignment="Left">
-            <TabControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:DocumentItem">
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                  <TextBlock Text="{Binding IconText}"
-                             FontSize="12"
-                             VerticalAlignment="Center"
-                             Margin="0,0,4,0"/>
-                  <TextBlock Text="{Binding DisplayName}"
-                             FontSize="12"
-                             VerticalAlignment="Center"/>
-                  <Button Classes="tab-close"
-                          ToolTip.Tip="关闭"
-                          Content="✕"/>
-                </StackPanel>
-              </DataTemplate>
-            </TabControl.ItemTemplate>
-          </TabControl>
+          <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+            <Button x:Name="NewDocumentTabButton"
+                    Content="+"
+                    ToolTip.Tip="新文档"
+                    Width="28"
+                    Height="28"
+                    FontSize="16"
+                    Padding="0"
+                    Margin="2,0,0,0"
+                    VerticalAlignment="Center"
+                    Background="Transparent"
+                    Foreground="{DynamicResource TabItemForeground}"
+                    BorderThickness="0"/>
+            <TabControl x:Name="DocumentTabControl"
+                        ItemsSource="{Binding OpenDocuments}"
+                        SelectedItem="{Binding ActiveDocument, Mode=TwoWay}"
+                        Margin="4,0,0,0"
+                        HorizontalAlignment="Left">
+              <TabControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:DocumentItem">
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="{Binding IconText}"
+                               FontSize="12"
+                               VerticalAlignment="Center"
+                               Margin="0,0,4,0"/>
+                    <TextBlock Text="{Binding DisplayName}"
+                               FontSize="12"
+                               VerticalAlignment="Center"/>
+                    <Button Classes="tab-close"
+                            ToolTip.Tip="关闭"
+                            Content="✕"/>
+                  </StackPanel>
+                </DataTemplate>
+              </TabControl.ItemTemplate>
+            </TabControl>
+          </StackPanel>
         </Border>
 
         <!-- 编辑区 + 预览区，有文档时显示 -->

@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Styling;
@@ -17,6 +18,7 @@ using AvaloniaEdit.Search;
 using MarkdownEditor.ViewModels;
 using MarkdownEditor.Engine.Highlighting;
 using MarkdownEditor.Export;
+using MarkdownEditor.Helpers;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
@@ -194,6 +196,8 @@ public partial class MainWindow : Window
         SetupFileTreeContextMenu(vm);
         SetupFileTreeRootButtons(vm);
         SetupDocumentTabBackStack(vm);
+        if (NewDocumentTabButton != null)
+            NewDocumentTabButton.Click += (_, _) => vm.NewDocument();
         SetupSearchResultsNavigation(vm);
         Closed += (_, _) =>
         {
@@ -1012,7 +1016,7 @@ public partial class MainWindow : Window
         EditorContextRedo.Click += (_, _) => EditorRedo();
         EditorContextCut.Click += (_, _) => EditorCut();
         EditorContextCopy.Click += (_, _) => EditorCopy();
-        EditorContextPaste.Click += (_, _) => EditorPaste();
+        EditorContextPaste.Click += (_, _) => _ = EditorPasteExAsync();
         EditorContextSelectAll.Click += (_, _) => EditorSelectAll();
         EditorContextInsertLink.Click += async (_, _) => await EditorInsertMarkdownResourceAsync(vm, isImage: false);
         EditorContextInsertImage.Click += async (_, _) => await EditorInsertMarkdownResourceAsync(vm, isImage: true);
@@ -1034,19 +1038,19 @@ public partial class MainWindow : Window
         async System.Threading.Tasks.Task UpdateEditorPasteEnabledAsync()
         {
             var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-            var hasText = false;
+            var canPaste = false;
             if (clipboard != null)
             {
                 try
                 {
                     var text = await clipboard.GetTextAsync();
-                    hasText = !string.IsNullOrEmpty(text);
+                    canPaste = !string.IsNullOrEmpty(text);
                 }
                 catch { }
             }
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                EditorContextPaste.IsEnabled = hasText;
+                EditorContextPaste.IsEnabled = canPaste;
             });
         }
 
@@ -1091,8 +1095,9 @@ public partial class MainWindow : Window
             Gesture = new KeyGesture(Key.D, KeyModifiers.Control),
             Command = new RelayCommand(EditorDuplicateSelectionOrLine)
         });
-        // Ctrl+F 由编辑区 SearchPanel 处理（文件内查找）；跨文件搜索通过侧栏“搜索”按钮打开
+        // Ctrl+F / Ctrl+H 打开编辑区查找面板并聚焦搜索框；跨文件搜索通过侧栏“搜索”按钮打开
         KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.F, KeyModifiers.Control), Command = new RelayCommand(() => FocusEditorFind(vm)) });
+        KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.H, KeyModifiers.Control), Command = new RelayCommand(() => FocusEditorFind(vm)) });
         // Ctrl+/- 前先按当前键盘焦点同步激活窗格，避免编辑区内层控件获焦时 GotFocus 未冒泡导致始终缩放到预览区
         KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.Add, KeyModifiers.Control), Command = new RelayCommand(() => { SyncActivePaneFromFocus(vm); vm.ZoomInCommand.Execute(null); }) });
         KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.OemPlus, KeyModifiers.Control), Command = new RelayCommand(() => { SyncActivePaneFromFocus(vm); vm.ZoomInCommand.Execute(null); }) });
@@ -1148,14 +1153,49 @@ public partial class MainWindow : Window
     /// <summary>聚焦编辑区并打开内置查找面板（Ctrl+F 文件内查找，与侧栏跨文件搜索分离）。</summary>
     private void FocusEditorFind(MainViewModel vm) => _editorController.FocusFind();
 
-    /// <summary>在 Tunnel 阶段捕获 Ctrl+S，确保编辑区获焦时也能触发保存（否则会被编辑器吞掉）。</summary>
+    /// <summary>在 Tunnel 阶段捕获 Ctrl+S、F2 文件树重命名等。</summary>
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key != Key.S || (e.KeyModifiers & KeyModifiers.Control) == 0)
-            return;
         if (DataContext is not MainViewModel vm) return;
-        vm.SaveCommand.Execute(null);
-        e.Handled = true;
+
+        // F2：文件树选中节点时进入重命名，焦点会由 TreeItemRenameTextBox_OnLoaded 移到重命名框
+        if (e.Key == Key.F2 && FileTreeList != null && e.Source is Visual sourceVisual)
+        {
+            var inFileTree = sourceVisual == FileTreeList || sourceVisual.GetVisualAncestors().Contains(FileTreeList);
+            if (inFileTree && vm.SelectedTreeNode is FileTreeNode node && !node.IsRenaming)
+            {
+                node.EditName = node.DisplayName;
+                node.IsRenaming = true;
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // 重命名框中按 Enter 时提交（兜底：Tunnel 阶段在 ListBox 之前处理，确保提交生效）
+        if (e.Key == Key.Enter && !e.Handled && e.Source is TextBox renameBox && renameBox.DataContext is FileTreeNode renamingNode && renamingNode.IsRenaming)
+        {
+            CommitTreeItemRename(renameBox);
+            e.Handled = true;
+            return;
+        }
+
+        // Ctrl+V 在编辑区时走统一粘贴（文件/图片/文本）
+        if (e.Key == Key.V && (e.KeyModifiers & KeyModifiers.Control) != 0 && EditorPaneGrid != null && e.Source is Visual v)
+        {
+            var inEditor = v == EditorPaneGrid || v.GetVisualAncestors().Contains(EditorPaneGrid);
+            if (inEditor)
+            {
+                _ = EditorPasteExAsync();
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (e.Key == Key.S && (e.KeyModifiers & KeyModifiers.Control) != 0)
+        {
+            vm.SaveCommand.Execute(null);
+            e.Handled = true;
+        }
     }
 
     /// <summary>
@@ -1396,18 +1436,70 @@ public partial class MainWindow : Window
             await clipboard.SetTextAsync(text);
     }
 
-    private async void EditorPaste()
+    /// <summary>统一粘贴入口：文件→插入链接，剪贴板图片→另存为后插入图片，否则文本粘贴。</summary>
+    private async System.Threading.Tasks.Task EditorPasteExAsync()
     {
         if (EditorTextBox is not TextEditor editor || editor.Document == null) return;
+        if (DataContext is not MainViewModel vm) return;
         editor.Focus();
         var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
         if (clipboard == null) return;
-        var text = await clipboard.GetTextAsync();
-        if (string.IsNullOrEmpty(text)) return;
+
+        var docPath = string.IsNullOrWhiteSpace(vm.CurrentFilePath) ? null : vm.CurrentFilePath;
         var seg = editor.TextArea.Selection?.SurroundingSegment;
-        int offset = seg?.Offset ?? editor.TextArea.Caret.Offset;
-        int length = seg?.Length ?? 0;
-        editor.Document.Replace(offset, length, text);
+        var offset = seg?.Offset ?? editor.TextArea.Caret.Offset;
+        var length = seg?.Length ?? 0;
+
+        // 1. 剪贴板为文件时插入链接 [文件名](path)；2. 剪贴板为图片时另存为后插入图片。需要 Avalonia 提供 TryGetDataAsync / TryGetFilesAsync / TryGetBitmapAsync（新剪贴板 API）。
+        if (await ClipboardPasteHelper.TryGetFileOrImageAsync(clipboard) is { } fileOrImage)
+        {
+            if (fileOrImage.FirstFilePath is { } localPath)
+            {
+                var displayPath = InsertMarkdownResourceWindow.ToDisplayPath(docPath, localPath);
+                var url = InsertMarkdownResourceWindow.EscapeMarkdownUrl(displayPath);
+                var fileName = Path.GetFileName(localPath);
+                var md = $"[{fileName}]({url})";
+                editor.Document.Replace(offset, length, md);
+                editor.TextArea.Caret.Offset = offset + md.Length;
+                editor.TextArea.Caret.BringCaretToView();
+                return;
+            }
+            if (fileOrImage.Bitmap != null)
+            {
+                var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+                {
+                    Title = "保存图片",
+                    DefaultExtension = "png",
+                    SuggestedFileName = "image.png",
+                    FileTypeChoices = new[] { new FilePickerFileType("PNG 图片") { Patterns = ["*.png"] } }
+                });
+                if (file != null && file.TryGetLocalPath() is { } savePath)
+                {
+                    try
+                    {
+                        fileOrImage.Bitmap.Save(savePath);
+                        var displayPath = InsertMarkdownResourceWindow.ToDisplayPath(docPath, savePath);
+                        var url = InsertMarkdownResourceWindow.EscapeMarkdownUrl(displayPath);
+                        var md = $"![图片]({url})";
+                        editor.Document.Replace(offset, length, md);
+                        editor.TextArea.Caret.Offset = offset + md.Length;
+                        editor.TextArea.Caret.BringCaretToView();
+                    }
+                    catch
+                    {
+                        // 保存失败时不插入
+                    }
+                }
+                return;
+            }
+        }
+
+        // 3. 文本粘贴
+        var text = await clipboard.GetTextAsync();
+        if (!string.IsNullOrEmpty(text))
+        {
+            editor.Document.Replace(offset, length, text);
+        }
     }
 
     private async System.Threading.Tasks.Task EditorInsertMarkdownResourceAsync(MainViewModel vm, bool isImage)

@@ -1,7 +1,9 @@
 using System;
 using System.Linq;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using AvaloniaEdit;
 using AvaloniaEdit.Search;
 using AvaloniaEdit.Rendering;
@@ -85,11 +87,28 @@ internal sealed class EditorController
         _pendingGoToLine = lineNumber;
     }
 
-    /// <summary>打开内置查找面板并聚焦编辑器。</summary>
+    /// <summary>打开内置查找面板并将焦点移到搜索输入框。</summary>
     public void FocusFind()
     {
         _editor.Focus();
         _searchPanel?.Open();
+        if (_searchPanel != null)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    var firstTextBox = _searchPanel.GetVisualDescendants()
+                        .OfType<Avalonia.Controls.TextBox>()
+                        .FirstOrDefault(t => t.Focusable);
+                    firstTextBox?.Focus();
+                }
+                catch
+                {
+                    // SearchPanel 未加载或已销毁时忽略
+                }
+            }, DispatcherPriority.Input);
+        }
     }
 
     private void SetupEditorHighlighting()
