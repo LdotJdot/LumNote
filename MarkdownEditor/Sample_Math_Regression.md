@@ -1,4 +1,4 @@
-# 数学公式回归测试文档
+﻿# 数学公式回归测试文档
 $$
 \sqrt{\sqrt{\sqrt{\sqrt{\sqrt{\sqrt{2}}}}}} = \frac{\sqrt{\sqrt{\sqrt{\sqrt{\sqrt{\sqrt{2}}}}}}}{\frac{2}{3}}
 $$

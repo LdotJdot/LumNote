@@ -305,7 +305,15 @@ public static partial class MathSkiaRenderer
                 return CreateMathFont(scale, italic: italicPreferred);
 
             if (IsGreekOrMathCodePoint(cp))
+            {
+                if (CanRenderWithMathTypeface(text))
+                    return CreateMathFont(scale, italic: italicPreferred);
+                var greekFontManager = SKFontManager.Default;
+                var fallbackGreek = cp <= char.MaxValue ? greekFontManager.MatchCharacter((char)cp) : null;
+                if (fallbackGreek != null)
+                    return new SKFont(fallbackGreek, BaseFontSize * scale);
                 return CreateMathFont(scale, italic: italicPreferred);
+            }
 
             var fm = SKFontManager.Default;
             var fallbackTf = cp <= char.MaxValue ? fm.MatchCharacter((char)cp) : null;
@@ -313,6 +321,26 @@ public static partial class MathSkiaRenderer
                 return new SKFont(fallbackTf, BaseFontSize * scale);
 
             return CreateMathFont(scale, italic: italicPreferred);
+        }
+
+        /// <summary>当前数学字体是否可渲染给定文本，避免映射到无字形码位后显示为方框。</summary>
+        public bool CanRenderWithMathTypeface(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return true;
+            using var paint = new SKPaint
+            {
+                Typeface = MathTypeface,
+                TextSize = BaseFontSize
+            };
+            try
+            {
+                return paint.ContainsGlyphs(text);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool IsGreekOrMathCodePoint(int cp) =>
@@ -851,8 +879,12 @@ public static partial class MathSkiaRenderer
                 // 单字母拉丁变量：用 Unicode 数学斜体区段（OpenType Math 的 Regular 面即含这些字形）
                 if (italic && TryMapLatinLetterToMathematicalItalic(sym.Text, out var mathItalic))
                 {
-                    drawText = mathItalic;
-                    italic = false;
+                    // 仅当当前数学字体可渲染该码位时才映射；否则保留原字符并走斜体/倾斜回退。
+                    if (ctx.CanRenderWithMathTypeface(mathItalic))
+                    {
+                        drawText = mathItalic;
+                        italic = false;
+                    }
                 }
                 var font = ctx.CreateSymbolFont(drawText, scale, italicPreferred: italic);
                 return new SymbolBox(drawText, font, textPaint);
