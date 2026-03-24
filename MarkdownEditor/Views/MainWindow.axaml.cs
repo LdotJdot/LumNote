@@ -2676,6 +2676,16 @@ public partial class MainWindow : Window
                 FontWeight = weight,
             };
 
+        static TextBlock ParaLeft(string text, FontWeight weight = FontWeight.Normal) =>
+            new()
+            {
+                Text = text,
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = textMaxW,
+                TextAlignment = TextAlignment.Left,
+                FontWeight = weight,
+            };
+
         var ok = new Button
         {
             Content = "确定",
@@ -2696,6 +2706,16 @@ public partial class MainWindow : Window
                     "We built this to solve our own problems. Now we maintain it to solve yours. Free forever. Works offline. No accounts, no tracking, no expiration date. Just a reliable tool that grows with you."
                 ),
                 Para("Spc: LdotJdot, Herman Chen"),
+                ParaLeft("开源组件与许可证", FontWeight.SemiBold),
+                ParaLeft("以下为本软件使用的主要开源组件及其许可证信息："),
+                ParaLeft("1) Avalonia UI - MIT License"),
+                ParaLeft("2) AvaloniaEdit - MIT License"),
+                ParaLeft("3) SkiaSharp - MIT License"),
+                ParaLeft("4) Skia (Google Skia) - BSD 3-Clause License"),
+                ParaLeft("5) LibGit2Sharp - MIT License"),
+                ParaLeft("6) libgit2 - GPLv2 with Linking Exception"),
+                ParaLeft("7) DiffPlex - Apache License 2.0"),
+                ParaLeft("完整许可证文本与第三方声明以各组件官方发布内容为准。"),
                 ok,
             },
         };
