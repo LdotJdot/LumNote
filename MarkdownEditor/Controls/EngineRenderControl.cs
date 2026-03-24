@@ -527,8 +527,12 @@ public class EngineRenderControl : Control
                     }
                     else
                     {
-                        // 链接与图片统一由此处理：判定本地路径或 URL，本地用系统/本程序打开，http 用浏览器
-                        TryOpenLink(url);
+                        // 脚注伪协议仅用于预览内滚动，解析失败时勿交给 TryOpenLink（否则会打开 https://footnote-back/... 等并抢走焦点）
+                        if (
+                            !url.StartsWith("footnote:", StringComparison.Ordinal)
+                            && !url.StartsWith("footnote-back:", StringComparison.Ordinal)
+                        )
+                            TryOpenLink(url);
                     }
                     e.Handled = true;
                     return;

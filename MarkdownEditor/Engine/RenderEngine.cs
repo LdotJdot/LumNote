@@ -304,9 +304,11 @@ public sealed class RenderEngine
                         offsetInRun = run.Text.Length;
                     }
                 }
+                // 落在行尾/行首空白时按最近 run 取字符位置以便拖选，但不携带 LinkUrl：
+                // 否则箭头右侧整段空白会继承 footnote-back 的链接，表现为手型却无跳转或误走 TryOpenLink。
                 if (bestRun != null)
-                    return (layoutBlock.BlockIndex, bestRun.Value.CharOffset + offsetInRun, true, bestRun.Value.LinkUrl, lineIdx);
-                return (layoutBlock.BlockIndex, runs[0].CharOffset, runs[0].Text.Length > 0, runs[0].LinkUrl, lineIdx);
+                    return (layoutBlock.BlockIndex, bestRun.Value.CharOffset + offsetInRun, true, null, lineIdx);
+                return (layoutBlock.BlockIndex, runs[0].CharOffset, runs[0].Text.Length > 0, null, lineIdx);
             }
         }
 
