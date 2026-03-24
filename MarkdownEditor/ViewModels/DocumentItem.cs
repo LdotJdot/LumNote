@@ -12,6 +12,12 @@ public sealed class DocumentItem
     public string? WorkspaceRoot { get; set; }
     public string DisplayName => string.IsNullOrEmpty(FullPath) ? RelativePath : System.IO.Path.GetFileName(FullPath);
 
+    /// <summary>标签悬停提示：标题 + 路径（供长文件名截断时查看全名）。</summary>
+    public string TabTooltip =>
+        string.IsNullOrEmpty(FullPath)
+            ? DisplayName
+            : $"{DisplayName}\n{FullPath}";
+
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
         { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg" };
 

@@ -22,6 +22,45 @@ public readonly struct SourceSpan
     public bool IsEmpty => Length <= 0;
 }
 
+/// <summary>链接引用定义目标（<c>[label]: url "title"</c>）。</summary>
+public readonly record struct LinkReferenceDefinition(string Url, string? Title);
+
+/// <summary>解析过程状态：收集链接引用定义，供行内 <c>[text][ref]</c> 消解。</summary>
+public sealed class MarkdownParseContext
+{
+    public Dictionary<string, LinkReferenceDefinition> LinkReferences { get; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>标签折叠空白、去除首尾空白（大小写不敏感匹配由字典承担）。</summary>
+    public static string NormalizeReferenceLabel(string label)
+    {
+        if (string.IsNullOrEmpty(label))
+            return "";
+        ReadOnlySpan<char> s = label.AsSpan().Trim();
+        Span<char> buf = stackalloc char[s.Length];
+        int w = 0;
+        bool pendingSpace = false;
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (char.IsWhiteSpace(s[i]))
+            {
+                pendingSpace = w > 0;
+            }
+            else
+            {
+                if (pendingSpace && w > 0)
+                    buf[w++] = ' ';
+                pendingSpace = false;
+                buf[w++] = s[i];
+            }
+        }
+        return new string(buf[..w]);
+    }
+}
+
+/// <summary>文档内自动生成的目录占位（由解析器将单独一行的 <c>[TOC]</c> 识别为此节点）。</summary>
+public sealed class TableOfContentsNode : MarkdownNode;
+
 /// <summary>
 /// Markdown 抽象语法树节点基类
 /// </summary>

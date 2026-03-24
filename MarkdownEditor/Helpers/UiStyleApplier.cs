@@ -39,6 +39,7 @@ public static class UiStyleApplier
         Set(resources, "TabItemSelectedForeground", style.TabItemSelectedForeground);
         Set(resources, "TabItemHoverBackground", style.TabItemHoverBackground);
         Set(resources, "TabItemSelectedBackground", style.TabItemSelectedBackground);
+        Set(resources, "TabItemSelectedUnderlineBrush", style.TabItemSelectedUnderline);
         Set(resources, "InputBackground", style.InputBackground);
         Set(resources, "InputForeground", style.InputForeground);
         Set(resources, "InputBorderBrush", style.InputBorderBrush);

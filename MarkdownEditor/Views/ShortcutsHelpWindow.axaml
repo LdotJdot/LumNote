@@ -1,0 +1,59 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MarkdownEditor.Views.ShortcutsHelpWindow"
+        Title="快捷键"
+        Width="520"
+        Height="560"
+        MinWidth="400"
+        MinHeight="360"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        Background="{DynamicResource WindowBackground}">
+  <Window.Styles>
+    <Style Selector="TextBlock.section">
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,16,0,6"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Foreground" Value="{DynamicResource SidebarTextForeground}"/>
+    </Style>
+    <Style Selector="TextBlock.line">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="0,2,0,0"/>
+      <Setter Property="Foreground" Value="{DynamicResource SidebarTextForeground}"/>
+    </Style>
+  </Window.Styles>
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto"
+                Padding="20,16">
+    <!-- 单列 * 宽度由 ScrollViewer 视口限定，TextBlock 才能按窗口宽度自动换行 -->
+    <Grid ColumnDefinitions="*">
+      <StackPanel Grid.Column="0" HorizontalAlignment="Stretch" Spacing="0">
+      <TextBlock Text="以下为当前版本内置快捷键（编辑区焦点下生效的已注明）。"
+                 TextWrapping="Wrap" FontSize="12" Margin="0,0,0,8"
+                 Foreground="{DynamicResource SidebarTextForeground}"/>
+      <TextBlock Classes="section" Text="文件"/>
+      <TextBlock Classes="line" Text="Ctrl+S — 保存（无路径时打开另存为）"/>
+      <TextBlock Classes="line" Text="另存为 — 使用菜单「文件 → 另存为…」"/>
+      <TextBlock Classes="section" Text="编辑与导航"/>
+      <TextBlock Classes="line" Text="Ctrl+Z / Ctrl+Y — 撤销 / 重做（编辑区）"/>
+      <TextBlock Classes="line" Text="Ctrl+X / Ctrl+C / Ctrl+V — 剪切 / 复制 / 粘贴（编辑区内 Ctrl+V 支持文件与图片）"/>
+      <TextBlock Classes="line" Text="Ctrl+A — 全选"/>
+      <TextBlock Classes="line" Text="Ctrl+D — 复制选区或当前行"/>
+      <TextBlock Classes="line" Text="Ctrl+F / Ctrl+H — 打开编辑区内查找"/>
+      <TextBlock Classes="line" Text="Alt+↑ / Alt+↓ — 当前行上移 / 下移"/>
+      <TextBlock Classes="line" Text="Alt+← / Alt+→ — 后退 / 前进（光标与文件位置历史）"/>
+      <TextBlock Classes="section" Text="显示与缩放"/>
+      <TextBlock Classes="line" Text="Ctrl++ / Ctrl+- — 放大 / 缩小（作用于当前激活的编辑区或预览区）"/>
+      <TextBlock Classes="line" Text="Ctrl+滚轮 — 在编辑区悬停时缩放编辑区"/>
+      <TextBlock Classes="line" Text="连按两次纯 Ctrl（中间无 Ctrl+C 等组合键）— 预览滚动到与光标大致对应的位置；若仅编辑模式会先切到编辑+预览"/>
+      <TextBlock Classes="section" Text="标签页"/>
+      <TextBlock Classes="line" Text="鼠标中键点击标签 — 关闭该标签（未保存时会提示）"/>
+      <TextBlock Classes="line" Text="右键标签 — 重新加载 / 关闭 / 保存并关闭 / 关闭其他 / 关闭全部"/>
+      <TextBlock Classes="section" Text="侧栏与树"/>
+      <TextBlock Classes="line" Text="F2 — 文件树选中项重命名"/>
+      <TextBlock Text="提示：部分系统快捷键由操作系统占用，可能与上表冲突。" FontSize="11" Foreground="#888" Margin="0,20,0,0" TextWrapping="Wrap"/>
+      </StackPanel>
+    </Grid>
+  </ScrollViewer>
+</Window>

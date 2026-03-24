@@ -53,25 +53,10 @@
       <Setter Property="FontWeight" Value="Normal"/>
       <Setter Property="MinHeight" Value="28"/>
     </Style>
-    <Style Selector="TabItem /template/ Border">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="BorderThickness" Value="0"/>
-      <Setter Property="BorderBrush" Value="Transparent"/>
-    </Style>
-    <Style Selector="TabItem:pointerover:not(:selected) /template/ Border">
-      <Setter Property="Background" Value="{DynamicResource TabItemHoverBackground}"/>
-    </Style>
-    <Style Selector="TabItem:selected /template/ Border">
-      <Setter Property="Background" Value="{DynamicResource TabItemSelectedBackground}"/>
-    </Style>
     <Style Selector="TabItem:selected">
       <Setter Property="Foreground" Value="{DynamicResource TabItemSelectedForeground}"/>
-      <Setter Property="FontWeight" Value="Normal"/>
     </Style>
-    <Style Selector="TabItem:selected:pointerover /template/ Border">
-      <Setter Property="Background" Value="{DynamicResource TabItemSelectedBackground}"/>
-    </Style>
-    <!-- 去掉 Avalonia Fluent 默认的下划线：隐藏 PART_SelectedPipe -->
+    <!-- Fluent Tab 底部指示条：默认隐藏；仅文档标签栏选中时用浅色/主题色显示（见 documentTabs） -->
     <Style Selector="TabItem /template/ Border#PART_SelectedPipe">
       <Setter Property="IsVisible" Value="False"/>
       <Setter Property="Height" Value="0"/>
@@ -99,6 +84,46 @@
     </Style>
     <Style Selector="TabItem:selected Button.tab-close">
       <Setter Property="IsVisible" Value="True"/>
+    </Style>
+    <!-- 文档标签：Fluent 模板根为 Border#PART_LayoutRoot，必须用此选择器才能显示选中背景与悬停 -->
+    <Style Selector="TabControl.documentTabs TabItem">
+      <Setter Property="Padding" Value="12,9,12,8"/>
+      <Setter Property="MinHeight" Value="36"/>
+    </Style>
+    <Style Selector="TabControl.documentTabs TabItem /template/ Border#PART_LayoutRoot">
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="TabControl.documentTabs TabItem:pointerover:not(:selected) /template/ Border#PART_LayoutRoot">
+      <Setter Property="Background" Value="{DynamicResource TabItemHoverBackground}"/>
+    </Style>
+    <Style Selector="TabControl.documentTabs TabItem:selected /template/ Border#PART_LayoutRoot">
+      <Setter Property="Background" Value="{DynamicResource TabItemSelectedBackground}"/>
+    </Style>
+    <Style Selector="TabControl.documentTabs TabItem:selected:pointerover /template/ Border#PART_LayoutRoot">
+      <Setter Property="Background" Value="{DynamicResource TabItemSelectedBackground}"/>
+    </Style>
+    <Style Selector="TabControl.documentTabs TabItem:selected:pressed /template/ Border#PART_LayoutRoot">
+      <Setter Property="Background" Value="{DynamicResource TabItemSelectedBackground}"/>
+    </Style>
+    <Style Selector="TabControl.documentTabs TabItem:selected TextBlock.docTabTitle">
+      <Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+    <!-- 文档标签选中：底部分隔条用主题资源（浅色为浅灰），避免 Fluent 默认近黑色 -->
+    <Style Selector="TabControl.documentTabs TabItem:selected /template/ Border#PART_SelectedPipe">
+      <Setter Property="IsVisible" Value="True"/>
+      <Setter Property="Height" Value="2"/>
+      <Setter Property="Background" Value="{DynamicResource TabItemSelectedUnderlineBrush}"/>
+    </Style>
+    <Style Selector="TabControl.documentTabs TabItem:selected:pointerover /template/ Border#PART_SelectedPipe">
+      <Setter Property="IsVisible" Value="True"/>
+      <Setter Property="Height" Value="2"/>
+      <Setter Property="Background" Value="{DynamicResource TabItemSelectedUnderlineBrush}"/>
+    </Style>
+    <Style Selector="TabControl.documentTabs TabItem:selected:pressed /template/ Border#PART_SelectedPipe">
+      <Setter Property="IsVisible" Value="True"/>
+      <Setter Property="Height" Value="2"/>
+      <Setter Property="Background" Value="{DynamicResource TabItemSelectedUnderlineBrush}"/>
     </Style>
 
     <Style Selector="GridSplitter">
@@ -304,6 +329,8 @@
             <MenuItem Header="退出" x:Name="ExitMenuItem"/>
           </MenuItem>
           <MenuItem Header="帮助(_H)">
+            <MenuItem Header="快捷键…" x:Name="ShortcutsHelpMenuItem"/>
+            <MenuItem Header="-"/>
             <MenuItem Header="关于" x:Name="AboutMenuItem"/>
           </MenuItem>
         </Menu>
@@ -1146,20 +1173,30 @@
                     Foreground="{DynamicResource TabItemForeground}"
                     BorderThickness="0"/>
             <TabControl x:Name="DocumentTabControl"
+                        Classes="documentTabs"
                         ItemsSource="{Binding OpenDocuments}"
                         SelectedItem="{Binding ActiveDocument, Mode=TwoWay}"
                         Margin="0"
                         HorizontalAlignment="Left">
               <TabControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:DocumentItem">
-                  <StackPanel Orientation="Horizontal" Spacing="4">
+                  <StackPanel Orientation="Horizontal"
+                              Spacing="4"
+                              ToolTip.Tip="{Binding TabTooltip}"
+                              ToolTip.ShowDelay="400">
                     <TextBlock Text="{Binding IconText}"
                                FontSize="12"
                                VerticalAlignment="Center"
-                               Margin="0,0,4,0"/>
-                    <TextBlock Text="{Binding DisplayName}"
+                               Margin="0,1,0,2"/>
+                    <TextBlock Classes="docTabTitle"
+                               Text="{Binding DisplayName}"
                                FontSize="12"
-                               VerticalAlignment="Center"/>
+                               FontWeight="Normal"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               TextWrapping="NoWrap"
+                               MaxWidth="220"
+                               Margin="0,1,0,2"/>
                     <Button Classes="tab-close"
                             ToolTip.Tip="关闭"
                             Content="✕"/>
@@ -1196,7 +1233,7 @@
                 Grid.Column="0"
                 RowDefinitions="*"
                 Classes="editorPane"
-                IsVisible="{Binding IsSingleEditorPaneVisible}">
+                IsVisible="{Binding EditorPaneLayoutVisible}">
             <ae:TextEditor x:Name="EditorTextBox"
                            Grid.Row="0"
                            x:CompileBindings="False"
@@ -1260,7 +1297,9 @@
                   BorderBrush="{DynamicResource SplitterBorderBrush}"
                   BorderThickness="1,0,0,0"
                   Width="4"
-                  Cursor="SizeWestEast"/>
+                  Cursor="SizeWestEast"
+                  IsVisible="{Binding ShowEditorPreviewSplitter}"
+                  IsHitTestVisible="{Binding ShowEditorPreviewSplitter}"/>
           <Border x:Name="ContentSplitterOverlay"
                   Grid.Column="0"
                   Grid.ColumnSpan="3"
@@ -1280,7 +1319,7 @@
                 Grid.Column="2"
                 RowDefinitions="*"
                 Classes="previewPane"
-                IsVisible="{Binding IsSingleEditorPaneVisible}">
+                IsVisible="{Binding PreviewPaneLayoutVisible}">
             <controls:MarkdownEngineView x:Name="PreviewEngine"
                                          Grid.Row="0"
                                          Focusable="True"

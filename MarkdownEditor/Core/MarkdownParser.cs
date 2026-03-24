@@ -12,8 +12,11 @@ public static class MarkdownParser
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DocumentNode Parse(ReadOnlySpan<char> input)
     {
+        var ctx = new MarkdownParseContext();
         var lines = SplitLines(input);
-        var blocks = ParseBlocks(lines);
+        PreScanLinkReferences(lines, ctx);
+        var blocks = ParseBlocks(lines, ctx);
+        ExpandTableOfContentsBlocks(blocks);
         return new DocumentNode { Children = blocks };
     }
 
@@ -40,7 +43,7 @@ public static class MarkdownParser
         return result;
     }
 
-    private static List<MarkdownNode> ParseBlocks(List<string> lines)
+    private static List<MarkdownNode> ParseBlocks(List<string> lines, MarkdownParseContext ctx)
     {
         var blocks = new List<MarkdownNode>();
         int i = 0;
@@ -75,7 +78,7 @@ public static class MarkdownParser
             // 引用块
             if (trimmed.StartsWith(">"))
             {
-                var (block, consumed) = ParseBlockquote(lines, i);
+                var (block, consumed) = ParseBlockquote(lines, i, ctx);
                 blocks.Add(block);
                 i += consumed;
                 continue;
@@ -84,7 +87,7 @@ public static class MarkdownParser
             // 无序列表
             if (IsBulletListItem(trimmed))
             {
-                var (block, consumed) = ParseBulletList(lines, i);
+                var (block, consumed) = ParseBulletList(lines, i, ctx);
                 blocks.Add(block);
                 i += consumed;
                 continue;
@@ -93,7 +96,7 @@ public static class MarkdownParser
             // 有序列表
             if (IsOrderedListItem(trimmed))
             {
-                var (block, consumed) = ParseOrderedList(lines, i);
+                var (block, consumed) = ParseOrderedList(lines, i, ctx);
                 blocks.Add(block);
                 i += consumed;
                 continue;
@@ -120,7 +123,7 @@ public static class MarkdownParser
             }
 
             // 标题
-            if (trimmed.StartsWith("#") && TryParseHeading(trimmed, out var heading))
+            if (trimmed.StartsWith("#") && TryParseHeading(trimmed, ctx, out var heading) && heading != null)
             {
                 blocks.Add(heading);
                 i++;
@@ -161,8 +164,8 @@ public static class MarkdownParser
                 }
             }
 
-            // HTML 块：行首为 < 且紧跟字母、/、!、?
-            if (IsHtmlBlockStart(trimmed))
+            // HTML 块：行首为 < 且紧跟字母、/、!、?（排除整行尖括号自动链接）
+            if (IsHtmlBlockStart(trimmed) && !IsAngleBracketAutolinkLine(trimmed))
             {
                 var (htmlBlock, consumed) = ParseHtmlBlock(lines, i);
                 blocks.Add(htmlBlock);
@@ -173,22 +176,77 @@ public static class MarkdownParser
             // 定义型列表：下一行以 : 开头
             if (i + 1 < lines.Count && IsDefinitionDefLine(lines[i + 1]))
             {
-                var (block, consumed) = ParseDefinitionList(lines, i);
+                var (block, consumed) = ParseDefinitionList(lines, i, ctx);
                 blocks.Add(block);
                 i += consumed;
                 continue;
             }
 
-            // 脚注定义 [^id]:
-            if (TryParseFootnoteDef(trimmed, out var fnDef))
+            // 链接引用定义 [label]: url "title"（非脚注）
+            if (TryParseLinkReferenceDefinition(trimmed, ctx))
             {
-                blocks.Add(fnDef);
                 i++;
                 continue;
             }
 
+            // 脚注定义 [^id]:（可多行续行：行首 ≥2 空格或 tab）
+            if (trimmed.Length > 1 && trimmed[0] == '[' && trimmed[1] == '^')
+            {
+                if (TryParseFootnoteDefFirstLine(trimmed, out var fnId, out var firstBody))
+                {
+                    var sb = new StringBuilder();
+                    if (!string.IsNullOrEmpty(firstBody))
+                        sb.Append(firstBody);
+                    int j = i + 1;
+                    while (j < lines.Count)
+                    {
+                        var raw = lines[j];
+                        if (string.IsNullOrWhiteSpace(raw))
+                            break;
+                        var tr = raw.TrimStart();
+                        if (TryParseLinkReferenceDefinition(tr, ctx))
+                            break;
+                        if (IsBlockStart(tr.AsSpan()))
+                            break;
+                        if (!IsFootnoteContinuationLine(raw))
+                            break;
+                        if (sb.Length > 0)
+                            sb.Append('\n');
+                        sb.Append(StripFootnoteContinuationPrefix(raw));
+                        j++;
+                    }
+
+                    var body = sb.ToString();
+                    var fnContent = string.IsNullOrEmpty(body)
+                        ? []
+                        : new List<MarkdownNode>
+                        {
+                            new ParagraphNode { Content = ParseInline(body, ctx) },
+                        };
+                    blocks.Add(new FootnoteDefNode { Id = fnId!, Content = fnContent });
+                    i = j;
+                    continue;
+                }
+            }
+
+            // 目录占位（单独一行 [TOC]）
+            if (string.Equals(trimmed, "[TOC]", StringComparison.OrdinalIgnoreCase))
+            {
+                blocks.Add(new TableOfContentsNode());
+                i++;
+                continue;
+            }
+
+            // Setext 标题（上一段式行 + === 或 ---）
+            if (TryParseSetextHeading(lines, i, ctx, out var setextHeading, out int setextLines))
+            {
+                blocks.Add(setextHeading!);
+                i += setextLines;
+                continue;
+            }
+
             // 段落 - 合并后续非空行
-            var (paragraph, pConsumed) = ParseParagraph(lines, i);
+            var (paragraph, pConsumed) = ParseParagraph(lines, i, ctx);
             blocks.Add(paragraph);
             i += pConsumed;
         }
@@ -214,9 +272,9 @@ public static class MarkdownParser
             i++;
         return i > 0
             && i < line.Length
-            && line[i] == '.'
+            && (line[i] == '.' || line[i] == ')')
             && i + 1 < line.Length
-            && (line[i + 1] == ' ' || line[i + 1] == ')');
+            && (line[i + 1] == ' ' || line[i + 1] == '\t');
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -252,7 +310,7 @@ public static class MarkdownParser
         return t.Length >= 2 && t[0] == ':' && (t[1] == ' ' || t[1] == '\t');
     }
 
-    private static (DefinitionListNode, int) ParseDefinitionList(List<string> lines, int start)
+    private static (DefinitionListNode, int) ParseDefinitionList(List<string> lines, int start, MarkdownParseContext ctx)
     {
         var items = new List<DefinitionItemNode>();
         int i = start;
@@ -269,7 +327,7 @@ public static class MarkdownParser
             if (IsDefinitionDefLine(termLine))
                 break;
 
-            var term = ParseInline(trimmed);
+            var term = ParseInline(trimmed, ctx);
             var definitions = new List<MarkdownNode>();
             i++;
 
@@ -290,7 +348,7 @@ public static class MarkdownParser
                 {
                     var content = defTrimmed.Length > 2 ? defTrimmed[2..].TrimStart() : "";
                     if (content.Length > 0)
-                        definitions.Add(new ParagraphNode { Content = ParseInline(content) });
+                        definitions.Add(new ParagraphNode { Content = ParseInline(content, ctx) });
                     i++;
                     continue;
                 }
@@ -313,6 +371,7 @@ public static class MarkdownParser
     private static bool IsBlockStart(ReadOnlySpan<char> t)
     {
         if (t.Length == 0) return false;
+        if (IsAngleBracketAutolinkLine(t)) return false;
         return t.StartsWith("#") || t.StartsWith(">") || t.StartsWith("```") || t.StartsWith("$$")
             || IsBulletListItem(t) || IsOrderedListItem(t) || IsHorizontalRule(t)
             || IsIndentedCodeLine(t) || IsHtmlBlockStart(t);
@@ -324,20 +383,381 @@ public static class MarkdownParser
             && (char.IsLetter(t[1]) || t[1] == '/' || t[1] == '!' || t[1] == '?');
     }
 
-    private static bool TryParseFootnoteDef(string trimmed, out FootnoteDefNode? node)
+    /// <summary>整行仅为 <c>&lt;http...&gt;</c> / <c>mailto:</c> 时当作段落自动链接，不当 HTML 块。</summary>
+    private static bool IsAngleBracketAutolinkLine(ReadOnlySpan<char> trimmed)
     {
-        node = null;
+        if (trimmed.Length < 3 || trimmed[0] != '<')
+            return false;
+        int gt = trimmed.IndexOf('>');
+        if (gt <= 1 || gt != trimmed.Length - 1)
+            return false;
+        var inner = trimmed[1..gt];
+        return inner.StartsWith("http://".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || inner.StartsWith("https://".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || inner.StartsWith("mailto:".AsSpan(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void PreScanLinkReferences(List<string> lines, MarkdownParseContext ctx)
+    {
+        bool inFence = false;
+        foreach (var line in lines)
+        {
+            var t = line.TrimStart();
+            if (t.StartsWith("```", StringComparison.Ordinal))
+            {
+                inFence = !inFence;
+                continue;
+            }
+            if (inFence || t.Length == 0)
+                continue;
+            TryParseLinkReferenceDefinition(t, ctx);
+        }
+    }
+
+    private static bool TryParseFootnoteDefFirstLine(string trimmed, out string? id, out string? firstBody)
+    {
+        id = null;
+        firstBody = null;
         if (trimmed.Length < 5 || trimmed[0] != '[' || trimmed[1] != '^')
             return false;
         int endBracket = 2;
         while (endBracket < trimmed.Length && trimmed[endBracket] != ']')
             endBracket++;
-        if (endBracket >= trimmed.Length || endBracket + 2 > trimmed.Length || trimmed[endBracket + 1] != ':')
+        if (endBracket >= trimmed.Length || endBracket + 1 >= trimmed.Length || trimmed[endBracket + 1] != ':')
             return false;
-        var id = trimmed[2..endBracket].ToString();
-        var content = trimmed[(endBracket + 2)..].TrimStart();
-        node = new FootnoteDefNode { Id = id, Content = [new ParagraphNode { Content = ParseInline(content) }] };
+        id = trimmed[2..endBracket].ToString();
+        firstBody = endBracket + 2 <= trimmed.Length ? trimmed[(endBracket + 2)..].TrimStart() : "";
         return true;
+    }
+
+    private static bool IsFootnoteContinuationLine(string line)
+    {
+        if (string.IsNullOrEmpty(line))
+            return false;
+        if (line[0] == '\t')
+            return true;
+        int spaces = 0;
+        for (int i = 0; i < line.Length && line[i] == ' '; i++)
+            spaces++;
+        return spaces >= 2;
+    }
+
+    private static string StripFootnoteContinuationPrefix(string line)
+    {
+        if (line.StartsWith('\t'))
+            return line.Length > 1 ? line[1..] : "";
+        if (line.Length >= 2 && line[0] == ' ' && line[1] == ' ')
+            return line[2..].TrimStart();
+        return line.TrimStart();
+    }
+
+    private static bool TryParseLinkReferenceDefinition(string trimmed, MarkdownParseContext ctx)
+    {
+        if (trimmed.Length < 5 || trimmed[0] != '[')
+            return false;
+        if (trimmed[1] == '^')
+            return false;
+        int close = trimmed.IndexOf(']', 1);
+        if (close < 0 || close + 1 >= trimmed.Length || trimmed[close + 1] != ':')
+            return false;
+        var label = trimmed[1..close];
+        if (label.Length == 0)
+            return false;
+        var rest = trimmed[(close + 2)..].TrimStart();
+        if (rest.Length == 0)
+            return false;
+        if (!TryParseReferenceLineDestinationAndTitle(rest.AsSpan(), out var url, out var title))
+            return false;
+        var key = MarkdownParseContext.NormalizeReferenceLabel(label.ToString());
+        if (key.Length > 0)
+            ctx.LinkReferences[key] = new LinkReferenceDefinition(url, title);
+        return true;
+    }
+
+    /// <summary>解析引用定义行中冒号后的 destination 与可选 title（至行尾）。</summary>
+    private static bool TryParseReferenceLineDestinationAndTitle(
+        ReadOnlySpan<char> span,
+        out string url,
+        out string? title
+    )
+    {
+        url = "";
+        title = null;
+        int i = 0;
+        while (i < span.Length && char.IsWhiteSpace(span[i]))
+            i++;
+        if (i >= span.Length)
+            return false;
+        int urlStart = i;
+        if (span[i] == '<')
+        {
+            int gt = span[i..].IndexOf('>');
+            if (gt < 0)
+                return false;
+            gt += i;
+            url = span[(i + 1)..gt].ToString();
+            i = gt + 1;
+        }
+        else
+        {
+            while (i < span.Length)
+            {
+                if (span[i] == '\\' && i + 1 < span.Length)
+                {
+                    i += 2;
+                    continue;
+                }
+                if (char.IsWhiteSpace(span[i]))
+                    break;
+                i++;
+            }
+            url = span[urlStart..i].ToString();
+        }
+        while (i < span.Length && char.IsWhiteSpace(span[i]))
+            i++;
+        if (i < span.Length)
+        {
+            if (!TryParseLinkTitleSuffix(span, i, out title, out var ti))
+                return false;
+            i += ti;
+            while (i < span.Length && char.IsWhiteSpace(span[i]))
+                i++;
+            if (i < span.Length)
+                return false;
+        }
+        return url.Length > 0;
+    }
+
+    private static bool TryParseLinkTitleSuffix(
+        ReadOnlySpan<char> span,
+        int i,
+        out string? title,
+        out int consumed
+    )
+    {
+        title = null;
+        consumed = 0;
+        if (i >= span.Length)
+            return false;
+        char q = span[i];
+        if (q == '"' || q == '\'')
+        {
+            var sb = new StringBuilder();
+            int j = i + 1;
+            while (j < span.Length)
+            {
+                if (span[j] == '\\' && j + 1 < span.Length)
+                {
+                    sb.Append(span[j + 1]);
+                    j += 2;
+                    continue;
+                }
+                if (span[j] == q)
+                {
+                    title = sb.ToString();
+                    consumed = j - i + 1;
+                    return true;
+                }
+                sb.Append(span[j]);
+                j++;
+            }
+            return false;
+        }
+        if (q == '(')
+        {
+            int depth = 1;
+            int j = i + 1;
+            var sb = new StringBuilder();
+            while (j < span.Length && depth > 0)
+            {
+                if (span[j] == '\\' && j + 1 < span.Length)
+                {
+                    sb.Append(span[j + 1]);
+                    j += 2;
+                    continue;
+                }
+                if (span[j] == '(')
+                {
+                    depth++;
+                    sb.Append('(');
+                    j++;
+                    continue;
+                }
+                if (span[j] == ')')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        title = sb.ToString();
+                        consumed = j - i + 1;
+                        return true;
+                    }
+                    sb.Append(')');
+                    j++;
+                    continue;
+                }
+                sb.Append(span[j]);
+                j++;
+            }
+            return false;
+        }
+        return false;
+    }
+
+    /// <summary>行内链接/图片的 <c>(destination optional-title)</c>，从 <paramref name="openIdx"/> 处的 <c>(</c> 开始。</summary>
+    private static bool TryParseParenLink(
+        ReadOnlySpan<char> span,
+        int openIdx,
+        out string url,
+        out string? title,
+        out int consumedFromOpen
+    )
+    {
+        url = "";
+        title = null;
+        consumedFromOpen = 0;
+        if (openIdx >= span.Length || span[openIdx] != '(')
+            return false;
+        int i = openIdx + 1;
+        while (i < span.Length && span[i] == ' ')
+            i++;
+        if (i >= span.Length)
+            return false;
+        int urlStart = i;
+        if (span[i] == '<')
+        {
+            int rel = span[i..].IndexOf('>');
+            if (rel < 0)
+                return false;
+            int gt = i + rel;
+            url = span[(i + 1)..gt].ToString();
+            i = gt + 1;
+            while (i < span.Length && span[i] == ' ')
+                i++;
+            if (i < span.Length && span[i] != ')')
+            {
+                if (!TryParseLinkTitleSuffix(span, i, out title, out var tl))
+                    return false;
+                i += tl;
+                while (i < span.Length && span[i] == ' ')
+                    i++;
+            }
+            if (i >= span.Length || span[i] != ')')
+                return false;
+            i++;
+            consumedFromOpen = i - openIdx;
+            return url.Length > 0;
+        }
+
+        int depth = 0;
+        while (i < span.Length)
+        {
+            if (span[i] == '\\' && i + 1 < span.Length)
+            {
+                i += 2;
+                continue;
+            }
+            if (span[i] == '(')
+            {
+                depth++;
+                i++;
+                continue;
+            }
+            if (span[i] == ')')
+            {
+                if (depth == 0)
+                    break;
+                depth--;
+                i++;
+                continue;
+            }
+            if (depth == 0 && char.IsWhiteSpace(span[i]))
+            {
+                int j = i;
+                while (j < span.Length && char.IsWhiteSpace(span[j]))
+                    j++;
+                if (j < span.Length && (span[j] == '"' || span[j] == '\'' || span[j] == '('))
+                    break;
+            }
+            i++;
+        }
+
+        if (i >= span.Length)
+            return false;
+        if (span[i] == ')')
+        {
+            url = span[urlStart..i].Trim().ToString();
+            i++;
+        }
+        else
+        {
+            url = span[urlStart..i].Trim().ToString();
+            while (i < span.Length && char.IsWhiteSpace(span[i]))
+                i++;
+            if (!TryParseLinkTitleSuffix(span, i, out title, out var tl))
+                return false;
+            i += tl;
+            while (i < span.Length && char.IsWhiteSpace(span[i]))
+                i++;
+            if (i >= span.Length || span[i] != ')')
+                return false;
+            i++;
+        }
+        consumedFromOpen = i - openIdx;
+        return url.Length > 0;
+    }
+
+    private static bool TryParseSetextHeading(
+        List<string> lines,
+        int i,
+        MarkdownParseContext ctx,
+        out HeadingNode? heading,
+        out int consumedLines
+    )
+    {
+        heading = null;
+        consumedLines = 0;
+        if (i + 1 >= lines.Count)
+            return false;
+        var t0 = lines[i].Trim();
+        if (t0.Length == 0)
+            return false;
+        if (t0[0] == '#')
+            return false;
+        var t1 = lines[i + 1].Trim();
+        if (t1.Length < 3)
+            return false;
+        bool allEq = true;
+        foreach (var c in t1)
+        {
+            if (c != '=')
+            {
+                allEq = false;
+                break;
+            }
+        }
+        if (allEq)
+        {
+            heading = new HeadingNode { Level = 1, Content = ParseInline(t0, ctx) };
+            consumedLines = 2;
+            return true;
+        }
+        bool allDash = true;
+        foreach (var c in t1)
+        {
+            if (c != '-')
+            {
+                allDash = false;
+                break;
+            }
+        }
+        if (allDash)
+        {
+            heading = new HeadingNode { Level = 2, Content = ParseInline(t0, ctx) };
+            consumedLines = 2;
+            return true;
+        }
+        return false;
     }
 
     private static bool IsTableSeparator(string line)
@@ -399,7 +819,7 @@ public static class MarkdownParser
         );
     }
 
-    private static (BlockquoteNode, int) ParseBlockquote(List<string> lines, int start)
+    private static (BlockquoteNode, int) ParseBlockquote(List<string> lines, int start, MarkdownParseContext ctx)
     {
         var innerLines = new List<string>();
         int i = start;
@@ -431,11 +851,11 @@ public static class MarkdownParser
             i++;
         }
 
-        var blocks = ParseBlocks(innerLines);
+        var blocks = ParseBlocks(innerLines, ctx);
         return (new BlockquoteNode { Children = blocks }, i - start);
     }
 
-    private static (BulletListNode, int) ParseBulletList(List<string> lines, int start)
+    private static (BulletListNode, int) ParseBulletList(List<string> lines, int start, MarkdownParseContext ctx)
     {
         var items = new List<ListItemNode>();
         int i = start;
@@ -502,7 +922,7 @@ public static class MarkdownParser
 
             var itemBlocks = new List<MarkdownNode>
             {
-                new ParagraphNode { Content = ParseInline(content) }
+                new ParagraphNode { Content = ParseInline(content, ctx) }
             };
             items.Add(
                 new ListItemNode
@@ -518,7 +938,7 @@ public static class MarkdownParser
         return (new BulletListNode { Items = items }, i - start);
     }
 
-    private static (OrderedListNode, int) ParseOrderedList(List<string> lines, int start)
+    private static (OrderedListNode, int) ParseOrderedList(List<string> lines, int start, MarkdownParseContext ctx)
     {
         var items = new List<ListItemNode>();
         int i = start;
@@ -543,10 +963,15 @@ public static class MarkdownParser
             if (items.Count == 0 && j > 0)
                 int.TryParse(trimmed[..j], out startNum);
 
-            var content = trimmed[(j + 2)..].TrimStart();
+            if (j >= trimmed.Length || (trimmed[j] != '.' && trimmed[j] != ')'))
+                break;
+            int cStart = j + 1;
+            while (cStart < trimmed.Length && (trimmed[cStart] == ' ' || trimmed[cStart] == '\t'))
+                cStart++;
+            var content = trimmed[cStart..];
             var itemBlocks = new List<MarkdownNode>
             {
-                new ParagraphNode { Content = ParseInline(content) }
+                new ParagraphNode { Content = ParseInline(content, ctx) }
             };
             items.Add(new ListItemNode { Content = itemBlocks });
             i++;
@@ -596,13 +1021,35 @@ public static class MarkdownParser
     private static List<string> ParseTableRow(string line)
     {
         var result = new List<string>();
-        var parts = line.Split('|');
-        int start = parts[0].Trim().Length == 0 ? 1 : 0;
-        int end =
-            parts.Length > 1 && parts[^1].Trim().Length == 0 ? parts.Length - 1 : parts.Length;
-        for (int i = start; i < end; i++)
-            result.Add(parts[i].Trim());
-        return result;
+        var cell = new StringBuilder();
+        bool escape = false;
+        for (int i = 0; i < line.Length; i++)
+        {
+            if (escape)
+            {
+                cell.Append(line[i]);
+                escape = false;
+                continue;
+            }
+            if (line[i] == '\\' && i + 1 < line.Length && line[i + 1] == '|')
+            {
+                escape = true;
+                continue;
+            }
+            if (line[i] == '|')
+            {
+                result.Add(cell.ToString().Trim());
+                cell.Clear();
+            }
+            else
+                cell.Append(line[i]);
+        }
+        result.Add(cell.ToString().Trim());
+        int s = result.Count > 0 && result[0].Length == 0 ? 1 : 0;
+        int e = result.Count > 1 && result[^1].Length == 0 ? result.Count - 1 : result.Count;
+        if (s >= e)
+            return [];
+        return result.GetRange(s, e - s);
     }
 
     private static List<TableAlign>? ParseTableAlignment(string sepLine, int colCount)
@@ -856,7 +1303,7 @@ public static class MarkdownParser
         return (new HtmlBlockNode { RawHtml = sb.ToString() }, i - start);
     }
 
-    private static bool TryParseHeading(ReadOnlySpan<char> line, out HeadingNode? heading)
+    private static bool TryParseHeading(ReadOnlySpan<char> line, MarkdownParseContext ctx, out HeadingNode? heading)
     {
         heading = null;
         int level = 0;
@@ -865,11 +1312,11 @@ public static class MarkdownParser
         if (level == 0 || level > 6)
             return false;
         var content = line[level..].TrimStart();
-        heading = new HeadingNode { Level = level, Content = ParseInline(content.ToString()) };
+        heading = new HeadingNode { Level = level, Content = ParseInline(content.ToString(), ctx) };
         return true;
     }
 
-    private static (ParagraphNode, int) ParseParagraph(List<string> lines, int start)
+    private static (ParagraphNode, int) ParseParagraph(List<string> lines, int start, MarkdownParseContext ctx)
     {
         var sb = new StringBuilder(lines[start]);
         int i = start + 1;
@@ -910,15 +1357,18 @@ public static class MarkdownParser
             i++;
         }
 
-        return (new ParagraphNode { Content = ParseInline(sb.ToString()) }, i - start);
+        return (new ParagraphNode { Content = ParseInline(sb.ToString(), ctx) }, i - start);
     }
 
     /// <summary>
-    /// 解析行内元素 - 支持 **bold** *italic* ~~strikethrough~~ `code` [link](url) ![img](url)
+    /// 解析行内元素 - 支持 **bold** *italic* ***粗斜*** ~~strikethrough~~ `code` [link](url) ![img](url)
     /// baseOffset 用于标注节点在所属输入中的起始偏移，便于编辑区高亮按列定位。
     /// 对于「按行调用」的场景，建议传入该行内起始列号作为 baseOffset。
     /// </summary>
-    public static List<InlineNode> ParseInline(string text, int baseOffset = 0)
+    public static List<InlineNode> ParseInline(string text, int baseOffset = 0) =>
+        ParseInline(text, null, baseOffset);
+
+    public static List<InlineNode> ParseInline(string text, MarkdownParseContext? ctx, int baseOffset = 0)
     {
         var result = new List<InlineNode>();
         var span = text.AsSpan();
@@ -928,10 +1378,31 @@ public static class MarkdownParser
         {
             int start = pos;
 
-            // 图片 ![alt](url)
+            if (span[pos] == '\\' && pos + 1 < span.Length)
+            {
+                result.Add(
+                    new TextNode
+                    {
+                        Content = span[pos + 1].ToString(),
+                        Span = new SourceSpan(baseOffset + pos, 2),
+                    }
+                );
+                pos += 2;
+                continue;
+            }
+
+            if (TryParseAutolink(span, pos, out var autoLink, out int autoConsumed) && autoLink != null)
+            {
+                autoLink.Span = new SourceSpan(baseOffset + pos, autoConsumed);
+                result.Add(autoLink);
+                pos += autoConsumed;
+                continue;
+            }
+
+            // 图片 ![alt](url) / ![alt][ref]
             if (pos + 1 < span.Length && span[pos] == '!' && span[pos + 1] == '[')
             {
-                if (TryParseImage(span, pos, out var img, out int consumed))
+                if (TryParseImage(span, pos, ctx, out var img, out int consumed) && img != null)
                 {
                     img.Span = new SourceSpan(baseOffset + start, consumed);
                     result.Add(img);
@@ -943,7 +1414,7 @@ public static class MarkdownParser
             // 脚注引用 [^id]
             if (pos < span.Length && span[pos] == '[' && pos + 2 < span.Length && span[pos + 1] == '^')
             {
-                if (TryParseFootnoteRef(span, pos, out var fnRef, out int consumed))
+                if (TryParseFootnoteRef(span, pos, out var fnRef, out int consumed) && fnRef != null)
                 {
                     fnRef.Span = new SourceSpan(baseOffset + start, consumed);
                     result.Add(fnRef);
@@ -952,10 +1423,10 @@ public static class MarkdownParser
                 }
             }
 
-            // 链接 [text](url)
+            // 链接 [text](url) / [text][ref] / [text][]
             if (pos < span.Length && span[pos] == '[')
             {
-                if (TryParseLink(span, pos, out var link, out int consumed))
+                if (TryParseLink(span, pos, ctx, out var link, out int consumed) && link != null)
                 {
                     link.Span = new SourceSpan(baseOffset + start, consumed);
                     result.Add(link);
@@ -967,7 +1438,7 @@ public static class MarkdownParser
             // 行内数学 $...$
             if (span[pos] == '$' && pos + 1 < span.Length && span[pos + 1] != '$')
             {
-                if (TryParseMathInline(span, pos, out var math, out int consumed))
+                if (TryParseMathInline(span, pos, out var math, out int consumed) && math != null)
                 {
                     math.Span = new SourceSpan(baseOffset + start, consumed);
                     result.Add(math);
@@ -979,7 +1450,7 @@ public static class MarkdownParser
             // 行内代码 `code`
             if (span[pos] == '`')
             {
-                if (TryParseCode(span, pos, out var code, out int consumed))
+                if (TryParseCode(span, pos, out var code, out int consumed) && code != null)
                 {
                     code.Span = new SourceSpan(baseOffset + start, consumed);
                     result.Add(code);
@@ -988,10 +1459,22 @@ public static class MarkdownParser
                 }
             }
 
+            // 粗体+斜体 ***text***（须在 ** 与单 * 之前）
+            if (pos + 2 < span.Length && span[pos] == '*' && span[pos + 1] == '*' && span[pos + 2] == '*')
+            {
+                if (TryParseBoldItalic(span, pos, '*', ctx, out var boldItalic, out int biConsumed) && boldItalic != null)
+                {
+                    boldItalic.Span = new SourceSpan(baseOffset + start, biConsumed);
+                    result.Add(boldItalic);
+                    pos += biConsumed;
+                    continue;
+                }
+            }
+
             // 加粗 **text**
             if (pos + 1 < span.Length && span[pos] == '*' && span[pos + 1] == '*')
             {
-                if (TryParseBold(span, pos, "**", out var bold, out int consumed))
+                if (TryParseBold(span, pos, "**", ctx, out var bold, out int consumed) && bold != null)
                 {
                     bold.Span = new SourceSpan(baseOffset + start, consumed);
                     result.Add(bold);
@@ -1000,10 +1483,22 @@ public static class MarkdownParser
                 }
             }
 
+            // 粗体+斜体 ___text___（须在 __ 与单 _ 之前）
+            if (pos + 2 < span.Length && span[pos] == '_' && span[pos + 1] == '_' && span[pos + 2] == '_')
+            {
+                if (TryParseBoldItalic(span, pos, '_', ctx, out var boldItalicU, out int biuConsumed) && boldItalicU != null)
+                {
+                    boldItalicU.Span = new SourceSpan(baseOffset + start, biuConsumed);
+                    result.Add(boldItalicU);
+                    pos += biuConsumed;
+                    continue;
+                }
+            }
+
             // 加粗 __text__
             if (pos + 1 < span.Length && span[pos] == '_' && span[pos + 1] == '_')
             {
-                if (TryParseBold(span, pos, "__", out var bold, out int consumed))
+                if (TryParseBold(span, pos, "__", ctx, out var bold, out int consumed) && bold != null)
                 {
                     bold.Span = new SourceSpan(baseOffset + start, consumed);
                     result.Add(bold);
@@ -1015,7 +1510,7 @@ public static class MarkdownParser
             // 删除线 ~~text~~
             if (pos + 1 < span.Length && span[pos] == '~' && span[pos + 1] == '~')
             {
-                if (TryParseStrikethrough(span, pos, out var strike, out int consumed))
+                if (TryParseStrikethrough(span, pos, ctx, out var strike, out int consumed) && strike != null)
                 {
                     strike.Span = new SourceSpan(baseOffset + start, consumed);
                     result.Add(strike);
@@ -1027,7 +1522,7 @@ public static class MarkdownParser
             // 斜体 *text* 或 _text_
             if (span[pos] == '*' || span[pos] == '_')
             {
-                if (TryParseItalic(span, pos, out var italic, out int consumed))
+                if (TryParseItalic(span, pos, ctx, out var italic, out int consumed) && italic != null)
                 {
                     italic.Span = new SourceSpan(baseOffset + start, consumed);
                     result.Add(italic);
@@ -1036,22 +1531,102 @@ public static class MarkdownParser
                 }
             }
 
-            // 退化为单字符文本节点
             var ch = span[pos];
-            result.Add(new TextNode
-            {
-                Content = ch.ToString(),
-                Span = new SourceSpan(baseOffset + pos, 1)
-            });
+            result.Add(
+                new TextNode
+                {
+                    Content = ch.ToString(),
+                    Span = new SourceSpan(baseOffset + pos, 1),
+                }
+            );
             pos++;
         }
 
         return result;
     }
 
+    private static bool TryParseAutolink(
+        ReadOnlySpan<char> span,
+        int start,
+        out LinkNode? link,
+        out int consumed
+    )
+    {
+        link = null;
+        consumed = 0;
+        if (start >= span.Length)
+            return false;
+        if (span[start] == '<')
+        {
+            int gt = span[start..].IndexOf('>');
+            if (gt <= 0)
+                return false;
+            gt += start;
+            var inner = span[(start + 1)..gt];
+            if (inner.Length == 0)
+                return false;
+            var s = inner.ToString();
+            if (s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || s.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                || s.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase))
+            {
+                link = new LinkNode { Text = s, Url = s };
+                consumed = gt - start + 1;
+                return true;
+            }
+            return false;
+        }
+
+        ReadOnlySpan<char> rest = span[start..];
+        if (rest.StartsWith("http://".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || rest.StartsWith("https://".AsSpan(), StringComparison.OrdinalIgnoreCase))
+        {
+            int i = 0;
+            while (i < rest.Length && !char.IsWhiteSpace(rest[i]) && rest[i] != '<')
+            {
+                if ("()[]{}\"'".Contains(rest[i]))
+                    break;
+                i++;
+            }
+            if (i < 8)
+                return false;
+            var url = rest[..i].ToString();
+            link = new LinkNode { Text = url, Url = url };
+            consumed = i;
+            return true;
+        }
+
+        if (rest.StartsWith("www.".AsSpan(), StringComparison.OrdinalIgnoreCase))
+        {
+            if (start > 0)
+            {
+                char p = span[start - 1];
+                if (char.IsLetterOrDigit(p) || p == '_' || p == '/')
+                    return false;
+            }
+            int i = 0;
+            while (i < rest.Length && !char.IsWhiteSpace(rest[i]) && rest[i] != '<')
+            {
+                if ("()[]{}\"'".Contains(rest[i]))
+                    break;
+                i++;
+            }
+            if (i <= 4)
+                return false;
+            var raw = rest[..i].ToString();
+            var url = "http://" + raw;
+            link = new LinkNode { Text = raw, Url = url };
+            consumed = i;
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool TryParseImage(
         ReadOnlySpan<char> span,
         int start,
+        MarkdownParseContext? ctx,
         out ImageNode? img,
         out int consumed
     )
@@ -1068,19 +1643,39 @@ public static class MarkdownParser
             return false;
 
         var alt = span[(start + 2)..endAlt].ToString();
-        if (endAlt + 2 >= span.Length || span[endAlt + 1] != '(')
+        if (endAlt + 1 >= span.Length)
             return false;
 
-        int endUrl = endAlt + 2;
-        while (endUrl < span.Length && span[endUrl] != ')' && span[endUrl] != ' ')
-            endUrl++;
-        if (endUrl >= span.Length || span[endUrl] != ')')
-            return false;
+        if (span[endAlt + 1] == '(')
+        {
+            if (
+                !TryParseParenLink(span, endAlt + 1, out var url, out var title, out var parenLen)
+            )
+                return false;
+            consumed = endAlt + 1 - start + parenLen;
+            img = new ImageNode { Alt = alt, Url = url, Title = title };
+            return true;
+        }
 
-        var url = span[(endAlt + 2)..endUrl].ToString();
-        consumed = endUrl - start + 1;
-        img = new ImageNode { Alt = alt, Url = url };
-        return true;
+        if (span[endAlt + 1] == '[' && ctx != null)
+        {
+            int endRef = endAlt + 2;
+            while (endRef < span.Length && span[endRef] != ']')
+                endRef++;
+            if (endRef >= span.Length)
+                return false;
+            var refLabel = span[(endAlt + 2)..endRef];
+            var key = MarkdownParseContext.NormalizeReferenceLabel(
+                refLabel.Length > 0 ? refLabel.ToString() : alt
+            );
+            if (key.Length == 0 || !ctx.LinkReferences.TryGetValue(key, out var def))
+                return false;
+            consumed = endRef - start + 1;
+            img = new ImageNode { Alt = alt, Url = def.Url, Title = def.Title };
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryParseFootnoteRef(
@@ -1107,6 +1702,7 @@ public static class MarkdownParser
     private static bool TryParseLink(
         ReadOnlySpan<char> span,
         int start,
+        MarkdownParseContext? ctx,
         out LinkNode? link,
         out int consumed
     )
@@ -1123,19 +1719,39 @@ public static class MarkdownParser
             return false;
 
         var text = span[(start + 1)..endText].ToString();
-        if (endText + 2 >= span.Length || span[endText + 1] != '(')
+        if (endText + 1 >= span.Length)
             return false;
 
-        int endUrl = endText + 2;
-        while (endUrl < span.Length && span[endUrl] != ')' && span[endUrl] != ' ')
-            endUrl++;
-        if (endUrl >= span.Length || span[endUrl] != ')')
-            return false;
+        if (span[endText + 1] == '(')
+        {
+            if (
+                !TryParseParenLink(span, endText + 1, out var url, out var title, out var parenLen)
+            )
+                return false;
+            consumed = endText + 1 - start + parenLen;
+            link = new LinkNode { Text = text, Url = url, Title = title };
+            return true;
+        }
 
-        var url = span[(endText + 2)..endUrl].ToString();
-        consumed = endUrl - start + 1;
-        link = new LinkNode { Text = text, Url = url };
-        return true;
+        if (span[endText + 1] == '[' && ctx != null)
+        {
+            int endRef = endText + 2;
+            while (endRef < span.Length && span[endRef] != ']')
+                endRef++;
+            if (endRef >= span.Length)
+                return false;
+            var refLabel = span[(endText + 2)..endRef];
+            var key = MarkdownParseContext.NormalizeReferenceLabel(
+                refLabel.Length > 0 ? refLabel.ToString() : text
+            );
+            if (key.Length == 0 || !ctx.LinkReferences.TryGetValue(key, out var def))
+                return false;
+            consumed = endRef - start + 1;
+            link = new LinkNode { Text = text, Url = def.Url, Title = def.Title };
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryParseMathInline(
@@ -1190,6 +1806,7 @@ public static class MarkdownParser
         ReadOnlySpan<char> span,
         int start,
         string delim,
+        MarkdownParseContext? ctx,
         out BoldNode? bold,
         out int consumed
     )
@@ -1206,7 +1823,7 @@ public static class MarkdownParser
             if (span.Slice(end, delim.Length).SequenceEqual(delim.AsSpan()))
             {
                 var inner = span[innerStart..end].ToString();
-                bold = new BoldNode { Content = ParseInline(inner) };
+                bold = new BoldNode { Content = ParseInline(inner, ctx) };
                 consumed = end - start + delim.Length;
                 return true;
             }
@@ -1218,6 +1835,7 @@ public static class MarkdownParser
     private static bool TryParseStrikethrough(
         ReadOnlySpan<char> span,
         int start,
+        MarkdownParseContext? ctx,
         out StrikethroughNode? strike,
         out int consumed
     )
@@ -1233,7 +1851,7 @@ public static class MarkdownParser
             if (span.Slice(end, 2).SequenceEqual("~~".AsSpan()))
             {
                 var inner = span[(start + 2)..end].ToString();
-                strike = new StrikethroughNode { Content = ParseInline(inner) };
+                strike = new StrikethroughNode { Content = ParseInline(inner, ctx) };
                 consumed = end - start + 2;
                 return true;
             }
@@ -1245,6 +1863,7 @@ public static class MarkdownParser
     private static bool TryParseItalic(
         ReadOnlySpan<char> span,
         int start,
+        MarkdownParseContext? ctx,
         out ItalicNode? italic,
         out int consumed
     )
@@ -1263,7 +1882,7 @@ public static class MarkdownParser
             if (span[end] == delim)
             {
                 var inner = span[(start + 1)..end].ToString();
-                italic = new ItalicNode { Content = ParseInline(inner) };
+                italic = new ItalicNode { Content = ParseInline(inner, ctx) };
                 consumed = end - start + 1;
                 return true;
             }
@@ -1272,5 +1891,153 @@ public static class MarkdownParser
             end++;
         }
         return false;
+    }
+
+    /// <summary>
+    /// 粗斜一体：<c>***text***</c>、<c>___text___</c>，AST 为 <see cref="BoldNode"/> 包裹单层 <see cref="ItalicNode"/>（与 CommonMark strong+em 一致）。
+    /// </summary>
+    private static bool TryParseBoldItalic(
+        ReadOnlySpan<char> span,
+        int start,
+        char delim,
+        MarkdownParseContext? ctx,
+        out BoldNode? node,
+        out int consumed
+    )
+    {
+        node = null;
+        consumed = 0;
+        if (delim != '*' && delim != '_')
+            return false;
+        if (start + 7 > span.Length)
+            return false;
+        if (span[start] != delim || span[start + 1] != delim || span[start + 2] != delim)
+            return false;
+        // 四个及以上连续分隔符交给其它规则（如 **、**** 等）
+        if (start + 3 < span.Length && span[start + 3] == delim)
+            return false;
+
+        int innerStart = start + 3;
+        int end = innerStart;
+        while (end + 2 < span.Length)
+        {
+            if (span[end] == delim && span[end + 1] == delim && span[end + 2] == delim)
+            {
+                var inner = span[innerStart..end].ToString();
+                if (inner.Length == 0)
+                    return false;
+                var italicInner = ParseInline(inner, ctx);
+                node = new BoldNode
+                {
+                    Content = new List<InlineNode> { new ItalicNode { Content = italicInner } },
+                };
+                consumed = end - start + 3;
+                return true;
+            }
+            end++;
+        }
+        return false;
+    }
+
+    private static void ExpandTableOfContentsBlocks(List<MarkdownNode> blocks)
+    {
+        var hasToc = false;
+        foreach (var b in blocks)
+        {
+            if (b is TableOfContentsNode)
+            {
+                hasToc = true;
+                break;
+            }
+        }
+        if (!hasToc)
+            return;
+
+        var headings = new List<HeadingNode>();
+        foreach (var b in blocks)
+            CollectHeadingsRecursive(b, headings);
+
+        for (int i = 0; i < blocks.Count; i++)
+        {
+            if (blocks[i] is not TableOfContentsNode)
+                continue;
+            var items = new List<ListItemNode>();
+            foreach (var h in headings)
+            {
+                var plain = FlattenInlinesPlain(h.Content);
+                var prefix = new string(' ', Math.Max(0, (h.Level - 1) * 2));
+                var line = string.IsNullOrEmpty(plain) ? prefix : prefix + plain;
+                items.Add(
+                    new ListItemNode
+                    {
+                        Content =
+                        [
+                            new ParagraphNode { Content = ParseInline(line) },
+                        ],
+                    }
+                );
+            }
+            blocks[i] = new BulletListNode { Items = items };
+        }
+    }
+
+    private static void CollectHeadingsRecursive(MarkdownNode? node, List<HeadingNode> list)
+    {
+        switch (node)
+        {
+            case HeadingNode h:
+                list.Add(h);
+                break;
+            case BlockquoteNode bq:
+                foreach (var c in bq.Children)
+                    CollectHeadingsRecursive(c, list);
+                break;
+            case BulletListNode bl:
+                foreach (var li in bl.Items)
+                    foreach (var c in li.Content)
+                        CollectHeadingsRecursive(c, list);
+                break;
+            case OrderedListNode ol:
+                foreach (var li in ol.Items)
+                    foreach (var c in li.Content)
+                        CollectHeadingsRecursive(c, list);
+                break;
+            case DefinitionListNode dl:
+                foreach (var di in dl.Items)
+                {
+                    foreach (var d in di.Definitions)
+                        CollectHeadingsRecursive(d, list);
+                }
+                break;
+        }
+    }
+
+    private static string FlattenInlinesPlain(List<InlineNode> nodes)
+    {
+        var sb = new StringBuilder();
+        foreach (var n in nodes)
+        {
+            if (n is TextNode t)
+                sb.Append(t.Content);
+            else if (n is BoldNode bn)
+                sb.Append(FlattenInlinesPlain(bn.Content));
+            else if (n is ItalicNode it)
+                sb.Append(FlattenInlinesPlain(it.Content));
+            else if (n is StrikethroughNode sn)
+                sb.Append(FlattenInlinesPlain(sn.Content));
+            else if (n is CodeNode cn)
+                sb.Append(cn.Content);
+            else if (n is LinkNode ln)
+                sb.Append(ln.Text);
+            else if (n is ImageNode img)
+                sb.Append(img.Alt);
+            else if (n is MathInlineNode m)
+                sb.Append(m.LaTeX);
+            else if (n is FootnoteRefNode fn)
+                sb.Append("[^").Append(fn.Id).Append(']');
+            else if (n is FootnoteMarkerNode fm)
+                sb.Append('[').Append(fm.Number).Append(']');
+        }
+        return sb.ToString();
     }
 }

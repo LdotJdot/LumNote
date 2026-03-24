@@ -512,6 +512,37 @@ public sealed class RenderEngine
     }
 
     /// <summary>
+    /// 将全文中的字符偏移映射到预览内容坐标系中的 Y（用于编辑区光标 ↔ 预览滚动对齐）。
+    /// </summary>
+    public float? GetContentYForDocumentOffset(IDocumentSource doc, int documentOffset)
+    {
+        EnsureLineIndex(doc);
+        if (_cachedBlockRanges.Count == 0 || _fullTextLineStarts == null)
+            return null;
+        if (doc.FullText.Length == 0)
+            return 0f;
+
+        int off = Math.Clamp(documentOffset, 0, doc.FullText.Length);
+        int? bi = GetBlockIndexForDocumentOffset(doc, off);
+        if (!bi.HasValue && _cachedBlocks.Count > 0)
+            bi = _cachedBlocks.Count - 1;
+        if (!bi.HasValue)
+            return null;
+
+        int b = bi.Value;
+        if (b < 0 || b >= _cachedBlockRanges.Count)
+            return null;
+
+        var (startLine, _) = _cachedBlockRanges[b];
+        if (startLine < 0 || startLine >= _fullTextLineStarts.Length)
+            return GetContentYForBlockOffset(doc, b, 0);
+
+        int blockStart = _fullTextLineStarts[startLine];
+        int charInBlock = Math.Max(0, off - blockStart);
+        return GetContentYForBlockOffset(doc, b, charInBlock);
+    }
+
+    /// <summary>
     /// 根据列表块索引与块内布局行号，解析出该行在文档中的真实行号（0-based）。
     /// 按「列表行」计数（含 - / * / + 与 [ ] 任务行），与布局一行一项一致，避免与普通列表相连时偏移。
     /// </summary>
@@ -757,12 +788,19 @@ public sealed class RenderEngine
     /// <summary>脚注区顶部在内容坐标系中的 Y，用于点击脚注上标后滚动。无脚注时返回 null。</summary>
     public float? GetContentYForFootnoteSection(IDocumentSource doc)
     {
-        if (_cachedLayouts == null) return null;
-        foreach (var b in _cachedLayouts)
+        if (_cachedLayouts != null)
         {
-            if (b.Kind == BlockKind.Footnotes)
-                return b.Bounds.Top;
+            foreach (var b in _cachedLayouts)
+            {
+                if (b.Kind == BlockKind.Footnotes)
+                    return b.Bounds.Top;
+            }
         }
+
+        // Slim 布局：脚注块不在当前 _cachedLayouts 窗口内时，用全文 cum 定位块顶。
+        int? idx = FindFootnoteSectionBlockIndex(_cachedBlocks);
+        if (idx.HasValue && TryGetContentYForBlockTop(idx.Value, out float y))
+            return y;
         return null;
     }
 
@@ -770,39 +808,166 @@ public sealed class RenderEngine
     public float? GetContentYForFirstFootnoteRefId(IDocumentSource doc, string id)
     {
         if (string.IsNullOrEmpty(id)) return null;
-        if (_cachedLayouts == null) return null;
-        foreach (var block in _cachedLayouts)
+
+        if (_cachedLayouts != null)
         {
-            foreach (var line in block.Lines)
+            foreach (var block in _cachedLayouts)
             {
-                foreach (var run in line.Runs)
+                foreach (var line in block.Lines)
                 {
-                    if (run.Style == RunStyle.FootnoteRef && string.Equals(run.FootnoteRefId, id, StringComparison.Ordinal))
-                        return block.Bounds.Top + line.Y + run.Bounds.Top;
+                    foreach (var run in line.Runs)
+                    {
+                        if (run.Style == RunStyle.FootnoteRef && string.Equals(run.FootnoteRefId, id, StringComparison.Ordinal))
+                            return block.Bounds.Top + line.Y + run.Bounds.Top;
+                    }
                 }
             }
         }
+
+        int? bi = FindFirstBodyBlockIndexWithFootnoteId(_cachedBlocks, id);
+        if (bi.HasValue && TryGetContentYForBlockTop(bi.Value, out float y))
+            return y;
         return null;
     }
 
     /// <summary>指定块内字符偏移对应的内容 Y（用于 ↩︎ 回链滚动）。</summary>
     public float? GetContentYForBlockOffset(IDocumentSource doc, int blockIndex, int charOffset)
     {
-        if (_cachedLayouts == null) return null;
-        foreach (var block in _cachedLayouts)
+        if (_cachedLayouts != null)
         {
-            if (block.BlockIndex != blockIndex) continue;
-            foreach (var line in block.Lines)
+            foreach (var block in _cachedLayouts)
             {
-                foreach (var run in line.Runs)
+                if (block.BlockIndex != blockIndex) continue;
+                foreach (var line in block.Lines)
                 {
-                    int end = run.CharOffset + run.Text.Length;
-                    if (charOffset >= run.CharOffset && charOffset <= end)
-                        return block.Bounds.Top + line.Y + run.Bounds.Top;
+                    foreach (var run in line.Runs)
+                    {
+                        int end = run.CharOffset + run.Text.Length;
+                        if (charOffset >= run.CharOffset && charOffset <= end)
+                            return block.Bounds.Top + line.Y + run.Bounds.Top;
+                    }
                 }
+                return block.Bounds.Top;
             }
-            return block.Bounds.Top;
+        }
+
+        if (TryGetContentYForBlockTop(blockIndex, out float y))
+            return y;
+        return null;
+    }
+
+    /// <summary>
+    /// 块顶在内容坐标系中的 Y（来自 cum）；要求已与当前块列表同步布局过。
+    /// </summary>
+    private bool TryGetContentYForBlockTop(int blockIndex, out float y)
+    {
+        y = 0;
+        var cum = _cumulativeY;
+        if (cum.Length != _cachedBlocks.Count + 1)
+            return false;
+        if (blockIndex < 0 || blockIndex >= _cachedBlocks.Count)
+            return false;
+        y = cum[blockIndex];
+        return true;
+    }
+
+    private static int? FindFootnoteSectionBlockIndex(IReadOnlyList<MarkdownNode?> blocks)
+    {
+        for (int i = 0; i < blocks.Count; i++)
+        {
+            if (blocks[i] is FootnoteSectionNode)
+                return i;
         }
         return null;
+    }
+
+    /// <summary>正文里第一次出现该脚注 id 的块下标（跳过文末 FootnoteSectionNode）。</summary>
+    private static int? FindFirstBodyBlockIndexWithFootnoteId(IReadOnlyList<MarkdownNode?> blocks, string id)
+    {
+        for (int i = 0; i < blocks.Count; i++)
+        {
+            if (blocks[i] is FootnoteSectionNode)
+                continue;
+            if (NodeContainsBodyFootnoteCitation(blocks[i], id))
+                return i;
+        }
+        return null;
+    }
+
+    private static bool NodeContainsBodyFootnoteCitation(MarkdownNode? node, string id)
+    {
+        if (node == null) return false;
+        switch (node)
+        {
+            case FootnoteSectionNode:
+                return false;
+            case ParagraphNode p:
+                return InlinesContainFootnoteId(p.Content, id);
+            case HeadingNode h:
+                return InlinesContainFootnoteId(h.Content, id);
+            case BlockquoteNode bq:
+                foreach (var c in bq.Children)
+                {
+                    if (NodeContainsBodyFootnoteCitation(c, id))
+                        return true;
+                }
+                return false;
+            case BulletListNode bl:
+                foreach (var it in bl.Items)
+                {
+                    if (ListItemContainsFootnoteId(it, id))
+                        return true;
+                }
+                return false;
+            case OrderedListNode ol:
+                foreach (var it in ol.Items)
+                {
+                    if (ListItemContainsFootnoteId(it, id))
+                        return true;
+                }
+                return false;
+            case DefinitionListNode dl:
+                foreach (var item in dl.Items)
+                {
+                    if (InlinesContainFootnoteId(item.Term, id))
+                        return true;
+                    foreach (var def in item.Definitions)
+                    {
+                        if (NodeContainsBodyFootnoteCitation(def, id))
+                            return true;
+                    }
+                }
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    private static bool ListItemContainsFootnoteId(ListItemNode li, string id)
+    {
+        foreach (var c in li.Content)
+        {
+            if (NodeContainsBodyFootnoteCitation(c, id))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool InlinesContainFootnoteId(List<InlineNode> inlines, string id)
+    {
+        foreach (var n in inlines)
+        {
+            if (n is FootnoteMarkerNode fm && string.Equals(fm.Id, id, StringComparison.Ordinal))
+                return true;
+            if (n is FootnoteRefNode fn && string.Equals(fn.Id, id, StringComparison.Ordinal))
+                return true;
+            if (n is BoldNode bn && InlinesContainFootnoteId(bn.Content, id))
+                return true;
+            if (n is ItalicNode inv && InlinesContainFootnoteId(inv.Content, id))
+                return true;
+            if (n is StrikethroughNode sn && InlinesContainFootnoteId(sn.Content, id))
+                return true;
+        }
+        return false;
     }
 }

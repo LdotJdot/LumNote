@@ -299,6 +299,7 @@ public sealed class AppConfig
         style.TabItemSelectedForeground = cfg.GetString($"{prefix}:tabItemSelectedForeground") ?? style.TabItemSelectedForeground;
         style.TabItemHoverBackground = cfg.GetString($"{prefix}:tabItemHoverBackground") ?? style.TabItemHoverBackground;
         style.TabItemSelectedBackground = cfg.GetString($"{prefix}:tabItemSelectedBackground") ?? style.TabItemSelectedBackground;
+        style.TabItemSelectedUnderline = cfg.GetString($"{prefix}:tabItemSelectedUnderline") ?? style.TabItemSelectedUnderline;
         style.InputBackground = cfg.GetString($"{prefix}:inputBackground") ?? style.InputBackground;
         style.InputForeground = cfg.GetString($"{prefix}:inputForeground") ?? style.InputForeground;
         style.InputBorderBrush = cfg.GetString($"{prefix}:inputBorderBrush") ?? style.InputBorderBrush;
@@ -338,6 +339,7 @@ public sealed class AppConfig
         cfg.Set($"{prefix}:tabItemSelectedForeground", style.TabItemSelectedForeground);
         cfg.Set($"{prefix}:tabItemHoverBackground", style.TabItemHoverBackground);
         cfg.Set($"{prefix}:tabItemSelectedBackground", style.TabItemSelectedBackground);
+        cfg.Set($"{prefix}:tabItemSelectedUnderline", style.TabItemSelectedUnderline);
         cfg.Set($"{prefix}:inputBackground", style.InputBackground);
         cfg.Set($"{prefix}:inputForeground", style.InputForeground);
         cfg.Set($"{prefix}:inputBorderBrush", style.InputBorderBrush);
@@ -469,6 +471,8 @@ public sealed class UiStyleColors
     public string TabItemSelectedForeground { get; set; } = "#ffffff";
     public string TabItemHoverBackground { get; set; } = "#3a3d41";
     public string TabItemSelectedBackground { get; set; } = "#333333";
+    /// <summary>文档标签选中时底部细条（Fluent PART_SelectedPipe）颜色；浅色主题宜浅灰避免近黑。</summary>
+    public string TabItemSelectedUnderline { get; set; } = "#e1e4e8";
     public string InputBackground { get; set; } = "#3c3c3c";
     public string InputForeground { get; set; } = "#f3f3f3";
     public string InputBorderBrush { get; set; } = "#3f3f46";
@@ -533,6 +537,7 @@ public sealed class UiConfig
             TabItemSelectedForeground = "#ffffff",
             TabItemHoverBackground = "#3a3d41",
             TabItemSelectedBackground = "#333333",
+            TabItemSelectedUnderline = "#6e7681",
             InputBackground = "#3c3c3c",
             InputForeground = "#f3f3f3",
             InputBorderBrush = "#3f3f46",
@@ -574,7 +579,8 @@ public sealed class UiConfig
             TabItemForeground = "#57606a",
             TabItemSelectedForeground = "#24292f",
             TabItemHoverBackground = "#eaeef2",
-            TabItemSelectedBackground = "#ffffff",
+            TabItemSelectedBackground = "#d8dee4",
+            TabItemSelectedUnderline = "#e1e4e8",
             InputBackground = "#ffffff",
             InputForeground = "#24292f",
             InputBorderBrush = "#d0d7de",

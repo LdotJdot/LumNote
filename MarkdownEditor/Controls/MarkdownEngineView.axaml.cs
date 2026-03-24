@@ -231,12 +231,6 @@ public partial class MarkdownEngineView : UserControl
             RenderControl.ViewportHeight = (float)Scroll.Viewport.Height;
     }
 
-    private void ClearSkipEditorToPreviewScrollSync()
-    {
-        if (DataContext is MainViewModel vm)
-            vm.SkipEditorToPreviewScrollSync = false;
-    }
-
     private void OnPreviewPointerWheelZoom(object? sender, PointerWheelEventArgs e)
     {
         if ((e.KeyModifiers & KeyModifiers.Control) == 0)
@@ -340,7 +334,6 @@ public partial class MarkdownEngineView : UserControl
         int newLineCount = string.IsNullOrEmpty(md) ? 0 : md.Split('\n').Length;
         bool forceFullParse = lineStart.HasValue && lineEnd.HasValue && lineStart.Value == 0 && lineEnd.Value >= newLineCount;
         RenderControl.RequestParseAndLayout(forceFullParse ? null : lineStart, forceFullParse ? null : lineEnd);
-        ClearSkipEditorToPreviewScrollSync();
     }
 
     protected override void OnDetachedFromVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)

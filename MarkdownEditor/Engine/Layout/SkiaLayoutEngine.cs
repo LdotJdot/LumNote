@@ -373,9 +373,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                 totalCharOffset += 1;
                 continue;
             }
-            var (text, style, linkUrl, footnoteRefId) = FlattenInline(n);
-            if (!string.IsNullOrEmpty(text))
-                runs.Add((text, style, linkUrl, footnoteRefId));
+            ExpandInlineNodeToRuns(n, false, false, runs);
         }
         if (runs.Count == 0)
         {
@@ -406,7 +404,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         foreach (var (text, style, linkUrl, footnoteRefId) in runs)
         {
             float w;
-            var font = GetFont(style == RunStyle.Bold, style == RunStyle.Italic, style == RunStyle.Code);
+            var font = GetFont(IsRunStyleBold(style), IsRunStyleItalic(style), style == RunStyle.Code);
             var paint = _measurePaint;
             paint.Typeface = font.Typeface;
             paint.TextSize = font.Size;
@@ -458,7 +456,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             }
             else
             {
-                var font = GetFont(style == RunStyle.Bold, style == RunStyle.Italic, style == RunStyle.Code);
+                var font = GetFont(IsRunStyleBold(style), IsRunStyleItalic(style), style == RunStyle.Code);
                 var paint = _measurePaint;
                 paint.Typeface = font.Typeface;
                 paint.TextSize = font.Size;
@@ -791,6 +789,87 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         return sb.ToString();
     }
 
+    private static RunStyle CombineEmphasisStyle(bool bold, bool italic) =>
+        bold && italic
+            ? RunStyle.BoldItalic
+            : bold ? RunStyle.Bold : italic ? RunStyle.Italic : RunStyle.Normal;
+
+    private static RunStyle CombineLinkStyle(bool bold, bool italic) =>
+        bold && italic
+            ? RunStyle.LinkBoldItalic
+            : bold ? RunStyle.LinkBold : italic ? RunStyle.LinkItalic : RunStyle.Link;
+
+    private static bool IsRunStyleBold(RunStyle style) =>
+        style
+            is RunStyle.Bold
+                or RunStyle.BoldItalic
+                or RunStyle.LinkBold
+                or RunStyle.LinkBoldItalic
+                or RunStyle.Heading1
+                or RunStyle.Heading2
+                or RunStyle.Heading3
+                or RunStyle.Heading4
+                or RunStyle.Heading5
+                or RunStyle.Heading6
+                or RunStyle.TableHeaderCell;
+
+    private static bool IsRunStyleItalic(RunStyle style) =>
+        style
+            is RunStyle.Italic
+                or RunStyle.BoldItalic
+                or RunStyle.Math
+                or RunStyle.LinkItalic
+                or RunStyle.LinkBoldItalic;
+
+    /// <summary>将行内 AST 展开为带正确粗/斜体组合的 runs（支持 <c>***</c> 产生的 Bold→Italic 嵌套及链接上叠加强调）。</summary>
+    private static void ExpandInlineNodeToRuns(
+        InlineNode n,
+        bool bold,
+        bool italic,
+        List<(string text, RunStyle style, string? linkUrl, string? footnoteRefId)> runs
+    )
+    {
+        switch (n)
+        {
+            case TextNode tn:
+                if (!string.IsNullOrEmpty(tn.Content))
+                    runs.Add((tn.Content, CombineEmphasisStyle(bold, italic), null, null));
+                break;
+            case BoldNode bn:
+                foreach (var c in bn.Content)
+                    ExpandInlineNodeToRuns(c, true, italic, runs);
+                break;
+            case ItalicNode it:
+                foreach (var c in it.Content)
+                    ExpandInlineNodeToRuns(c, bold, true, runs);
+                break;
+            case StrikethroughNode sn:
+                runs.Add((FlattenInlines(sn.Content), RunStyle.Strikethrough, null, null));
+                break;
+            case CodeNode cn:
+                runs.Add((cn.Content ?? "", RunStyle.Code, null, null));
+                break;
+            case LinkNode ln:
+                runs.Add((ln.Text ?? "", CombineLinkStyle(bold, italic), ln.Url, null));
+                break;
+            case ImageNode img:
+                runs.Add((img.Alt ?? "", RunStyle.Image, img.Url, null));
+                break;
+            case MathInlineNode math:
+                runs.Add((math.LaTeX ?? "", RunStyle.Math, null, null));
+                break;
+            case FootnoteRefNode fn:
+                runs.Add(("[^" + fn.Id + "]", RunStyle.FootnoteRef, null, null));
+                break;
+            case FootnoteMarkerNode fm:
+            {
+                var num = fm.Number.ToString();
+                runs.Add(($"[{num}]", RunStyle.FootnoteRef, "footnote:" + num, fm.Id));
+                break;
+            }
+        }
+    }
+
     /// <summary>表格单元格内换行时使用的安全边距（px），避免测量舍入与 ITextMeasurer 的 +1 余量累积导致文本超出右边界。</summary>
     private const float TableCellBreakMargin = 6f;
     /// <summary>剩余宽度低于此值时本行不再接新内容，提前换行，避免“挤到边界再截断”的视觉效果。</summary>
@@ -940,8 +1019,12 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                             var runStyle = isHeader ? RunStyle.TableHeaderCell : RunStyle.TableCell;
                             if (style == RunStyle.Math) runStyle = RunStyle.Math;
                             else if (style == RunStyle.Link) runStyle = RunStyle.Link;
+                            else if (style == RunStyle.LinkBold) runStyle = RunStyle.LinkBold;
+                            else if (style == RunStyle.LinkItalic) runStyle = RunStyle.LinkItalic;
+                            else if (style == RunStyle.LinkBoldItalic) runStyle = RunStyle.LinkBoldItalic;
                             else if (style == RunStyle.Bold) runStyle = RunStyle.Bold;
                             else if (style == RunStyle.Italic) runStyle = RunStyle.Italic;
+                            else if (style == RunStyle.BoldItalic) runStyle = RunStyle.BoldItalic;
 
                             // 将 run 右边界钳位到单元格内边界，并限制 runX 递进不超出 innerRight，避免舍入/测量余量导致文本溢出
                             var runRight = Math.Min(runX + w, innerRight);
@@ -986,7 +1069,23 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             if (style == RunStyle.Math)
                 runs.Add((text, RunStyle.Math, null));
             else
-                runs.Add((text, style == RunStyle.Bold ? RunStyle.Bold : style == RunStyle.Italic ? RunStyle.Italic : style == RunStyle.Link ? RunStyle.Link : RunStyle.Normal, linkUrl));
+                runs.Add(
+                    (
+                        text,
+                        style switch
+                        {
+                            RunStyle.Bold => RunStyle.Bold,
+                            RunStyle.Italic => RunStyle.Italic,
+                            RunStyle.BoldItalic => RunStyle.BoldItalic,
+                            RunStyle.Link => RunStyle.Link,
+                            RunStyle.LinkBold => RunStyle.LinkBold,
+                            RunStyle.LinkItalic => RunStyle.LinkItalic,
+                            RunStyle.LinkBoldItalic => RunStyle.LinkBoldItalic,
+                            _ => RunStyle.Normal,
+                        },
+                        linkUrl
+                    )
+                );
         }
         return runs;
     }
@@ -996,9 +1095,19 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         if (n is TextNode t) return (t.Content ?? "", RunStyle.Normal, null, false);
         if (n is BoldNode b)
         {
-            var sb = new StringBuilder();
-            foreach (var child in b.Content) { var (txt, _, _, _) = FlattenInlineStatic(child); sb.Append(txt); }
-            return (sb.ToString(), RunStyle.Bold, null, false);
+            if (b.Content.Count == 1 && b.Content[0] is ItalicNode loneIt)
+            {
+                var sb = new StringBuilder();
+                foreach (var child in loneIt.Content)
+                {
+                    var (txt, _, _, _) = FlattenInlineStatic(child);
+                    sb.Append(txt);
+                }
+                return (sb.ToString(), RunStyle.BoldItalic, null, false);
+            }
+            var sbBold = new StringBuilder();
+            foreach (var child in b.Content) { var (txt, _, _, _) = FlattenInlineStatic(child); sbBold.Append(txt); }
+            return (sbBold.ToString(), RunStyle.Bold, null, false);
         }
         if (n is ItalicNode i)
         {
@@ -1037,16 +1146,8 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
     /// <summary>为指定样式配置测量用的 SKPaint（字号、字体一致）。</summary>
     private void ConfigurePaintForStyle(RunStyle style, SKPaint paint)
     {
-        bool bold =
-            style is RunStyle.Bold
-            or RunStyle.Heading1
-            or RunStyle.Heading2
-            or RunStyle.Heading3
-            or RunStyle.Heading4
-            or RunStyle.Heading5
-            or RunStyle.Heading6
-            or RunStyle.TableHeaderCell;
-        bool italic = style is RunStyle.Italic or RunStyle.Math;
+        bool bold = IsRunStyleBold(style);
+        bool italic = IsRunStyleItalic(style);
         bool code = style is RunStyle.Code;
         var font = GetFont(bold, italic, code);
         paint.Typeface = font.Typeface;
@@ -1415,11 +1516,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                 {
                     var runs = new List<(string text, RunStyle style, string? linkUrl, string? footnoteRefId)>();
                     foreach (var n in p.Content)
-                    {
-                        var (text, style, linkUrl, _) = FlattenInline(n);
-                        if (!string.IsNullOrEmpty(text))
-                            runs.Add((text, style, linkUrl, null));
-                    }
+                        ExpandInlineNodeToRuns(n, false, false, runs);
                     var fullTextSb = new StringBuilder();
                     for (int ri = 0; ri < runs.Count; ri++)
                         fullTextSb.Append(runs[ri].text);
@@ -1491,11 +1588,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             if (item.Content.Count > 0 && item.Content[0] is ParagraphNode p)
             {
                 foreach (var n in p.Content)
-                {
-                    var (text, style, linkUrl, footnoteRefId) = FlattenInline(n);
-                    if (!string.IsNullOrEmpty(text))
-                        contentRuns.Add((text, style, linkUrl, footnoteRefId));
-                }
+                    ExpandInlineNodeToRuns(n, false, false, contentRuns);
             }
 
             if (contentRuns.Count == 0)
@@ -1551,7 +1644,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
     public int MeasureTextOffset(string text, float x, RunStyle style)
     {
         if (string.IsNullOrEmpty(text)) return 0;
-        var font = GetFont(style == RunStyle.Bold || style == RunStyle.TableHeaderCell, style == RunStyle.Italic || style == RunStyle.Math, style == RunStyle.Code);
+        var font = GetFont(IsRunStyleBold(style), IsRunStyleItalic(style), style == RunStyle.Code);
         if (style is RunStyle.Heading1 or RunStyle.Heading2 or RunStyle.Heading3
             or RunStyle.Heading4 or RunStyle.Heading5 or RunStyle.Heading6)
             font = new SKFont(SKTypeface.FromFamilyName(GetBodyTypeface().FamilyName, SKFontStyle.Bold), style switch

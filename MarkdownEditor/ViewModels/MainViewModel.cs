@@ -306,9 +306,6 @@ public sealed partial class MainViewModel : ViewModelBase
     public int CaretLine { get => _caretLine; set => SetProperty(ref _caretLine, value); }
     public int CaretColumn { get => _caretColumn; set => SetProperty(ref _caretColumn, value); }
 
-    /// <summary>为 true 时，编辑区→预览的滚动同步应跳过，避免预览发起更新（如 todo 勾选）后编辑器写回触发同步覆盖预览滚动恢复。</summary>
-    public bool SkipEditorToPreviewScrollSync { get; set; }
-
     public string CurrentMarkdown
     {
         get => _currentMarkdown;
@@ -798,6 +795,55 @@ public sealed partial class MainViewModel : ViewModelBase
         ReloadWithCurrentEncoding();
     }
 
+    /// <summary>
+    /// 从磁盘重新加载指定已打开标签（使用文档当前编码；图片标签会刷新预览缓存）。
+    /// 调用方已确认可丢弃未保存编辑。
+    /// </summary>
+    public void ReloadDocumentFromDisk(DocumentItem? doc)
+    {
+        if (doc == null || string.IsNullOrWhiteSpace(doc.FullPath) || !File.Exists(doc.FullPath))
+            return;
+
+        if (IsPreviewableImagePath(doc.FullPath))
+        {
+            doc.LastKnownWriteTimeUtc = File.GetLastWriteTimeUtc(doc.FullPath);
+            doc.IsModified = false;
+            if (ReferenceEquals(_activeDocument, doc))
+            {
+                var path = doc.FullPath;
+                PreviewImagePath = null;
+                OnPropertyChanged(nameof(PreviewImagePath));
+                Dispatcher.UIThread.Post(() =>
+                {
+                    PreviewImagePath = path;
+                    OnPropertyChanged(nameof(PreviewImagePath));
+                });
+            }
+
+            return;
+        }
+
+        try
+        {
+            var enc = GetEncodingByName(doc.EncodingName);
+            var text = File.ReadAllText(doc.FullPath, enc);
+            doc.CachedMarkdown = text;
+            doc.IsModified = false;
+            doc.LastKnownWriteTimeUtc = File.GetLastWriteTimeUtc(doc.FullPath);
+            if (ReferenceEquals(_activeDocument, doc))
+            {
+                _currentMarkdown = text;
+                _isModified = false;
+                OnPropertyChanged(nameof(CurrentMarkdown));
+                OnPropertyChanged(nameof(IsModified));
+            }
+        }
+        catch
+        {
+            /* 忽略 IO/编码异常 */
+        }
+    }
+
     /// <summary>按当前文档所选编码重新读取当前文件并更新编辑区（编码切换时调用）。</summary>
     private void ReloadWithCurrentEncoding()
     {
@@ -1124,7 +1170,10 @@ public sealed partial class MainViewModel : ViewModelBase
                 // 将当前布局模式写回配置，供下次启动时恢复
                 Config.Ui.LayoutMode = value.ToString();
                 OnPropertyChanged(nameof(ShowEditor));
-                OnPropertyChanged(nameof(ShowPreview));                
+                OnPropertyChanged(nameof(ShowPreview));
+                OnPropertyChanged(nameof(EditorPaneLayoutVisible));
+                OnPropertyChanged(nameof(PreviewPaneLayoutVisible));
+                OnPropertyChanged(nameof(ShowEditorPreviewSplitter));
             }
         }
     }
@@ -1164,6 +1213,14 @@ public sealed partial class MainViewModel : ViewModelBase
 
     public bool ShowEditor => _layoutMode is EditorLayoutMode.Both or EditorLayoutMode.EditorOnly;
     public bool ShowPreview => _layoutMode is EditorLayoutMode.Both or EditorLayoutMode.PreviewOnly;
+
+    /// <summary>单栏「仅编辑/仅预览」时真正折叠对应窗格，避免 0 星宽列仍可被拖出。</summary>
+    public bool EditorPaneLayoutVisible => ShowEditor && !IsDiffCompareActive;
+
+    public bool PreviewPaneLayoutVisible => ShowPreview && !IsDiffCompareActive;
+
+    /// <summary>仅「编辑+预览」且非 Git 比对时显示中间分隔条并可拖动。</summary>
+    public bool ShowEditorPreviewSplitter => _layoutMode == EditorLayoutMode.Both && !IsDiffCompareActive;
 
     public bool IsExplorerActive
     {
@@ -1840,6 +1897,9 @@ public sealed partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(ShowMarkdownPreviewWhenNotDiffing));
         OnPropertyChanged(nameof(ShowPreviewImageWhenNotDiffing));
         OnPropertyChanged(nameof(IsSingleEditorPaneVisible));
+        OnPropertyChanged(nameof(EditorPaneLayoutVisible));
+        OnPropertyChanged(nameof(PreviewPaneLayoutVisible));
+        OnPropertyChanged(nameof(ShowEditorPreviewSplitter));
         NotifyWelcomeViewChanged();
     }
 
@@ -1856,6 +1916,9 @@ public sealed partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(ShowMarkdownPreviewWhenNotDiffing));
         OnPropertyChanged(nameof(ShowPreviewImageWhenNotDiffing));
         OnPropertyChanged(nameof(IsSingleEditorPaneVisible));
+        OnPropertyChanged(nameof(EditorPaneLayoutVisible));
+        OnPropertyChanged(nameof(PreviewPaneLayoutVisible));
+        OnPropertyChanged(nameof(ShowEditorPreviewSplitter));
         NotifyWelcomeViewChanged();
     }
 

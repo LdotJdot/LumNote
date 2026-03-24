@@ -380,7 +380,7 @@ public sealed class MarkdownHighlightingService
         // 将 startCol 之前的前缀裁掉，让 parser 只看到我们关心的片段；
         // 通过 baseOffset 告诉 parser：该片段在整行中的起始列号。
         string slice = startCol == 0 ? line : line[startCol..];
-        var inlines = MarkdownParser.ParseInline(slice, baseOffset: startCol);
+        var inlines = MarkdownParser.ParseInline(slice, null, startCol);
 
         if (inlines.Count == 0)
             return;

@@ -92,7 +92,7 @@
 | **MainWindow** | 上帝视图 | 窗口、编辑器高亮、滚动同步、文件树、搜索、导出、设置、菜单、快捷键、Alt 键处理等全在一类，职责过多，难单测和扩展。 |
 | **MainViewModel** | 上帝 VM | 文档列表、打开/当前文档、搜索、文件树、最近文件、配置、编辑/预览状态、焦点栈、导出等全在一类，难维护和测试。 |
 | **Views ↔ MainViewModel** | 强耦合 | 大量 `DataContext is MainViewModel`、直接调 `vm.XXX`，不利于替换 VM 或复用视图。 |
-| **MarkdownEngineView** | 与 MainViewModel 直接耦合 | `ClearSkipEditorToPreviewScrollSync`、`DataContext is MainViewModel` 等，复用性差。 |
+| **MarkdownEngineView** | 与 MainViewModel 直接耦合 | 仍存在 `DataContext is MainViewModel` 与直接调用 VM 命令/状态，复用性差。 |
 | **Engine ↔ Math** | 命名与依赖 | SkiaLayoutEngine 直接引用 `MarkdownEditor.Latex.MathSkiaRenderer`，若以后做“无数学”轻量引擎需改依赖；命名“Latex”与“Math”混用。 |
 | **AppConfig** | 路径不可配置 | `DefaultConfigPath` / `RecentFilesPath` 固定为 `UserProfile\.markdown-editor\`，无便携模式或多配置。 |
 

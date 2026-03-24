@@ -130,6 +130,20 @@ public class EngineRenderControl : Control
     /// <summary>下次 ScrollOffset 变化时暂不触发布局防抖（用于程序化恢复滚动时避免级联布局）。</summary>
     public void SuppressNextScrollLayout() => _suppressNextScrollLayout = true;
 
+    /// <summary>按全文字符偏移滚动预览（如编辑区连按两次 Ctrl 对齐光标）。成功返回 true。</summary>
+    public bool TryScrollToDocumentOffset(int documentOffset)
+    {
+        var engine = GetOrCreateEngine();
+        if (engine == null || Document == null)
+            return false;
+        var y = engine.GetContentYForDocumentOffset(Document, documentOffset);
+        if (!y.HasValue)
+            return false;
+        RequestScrollToY?.Invoke(Math.Max(0f, y.Value - 40f));
+        RequestLayoutForViewportAfterProgrammaticScroll();
+        return true;
+    }
+
     private bool _suppressNextScrollLayout;
 
     /// <summary>由父级设置：滚动触发布局前调用，用于清除待恢复的滚动比例，避免覆盖用户滚动位置。</summary>
@@ -346,6 +360,25 @@ public class EngineRenderControl : Control
         catch { }
     }
 
+    /// <summary>
+    /// 脚注跳转等程序化改变 Scroll.Offset 之后必须按新滚动位置立即提交 slim 布局。
+    /// 布局刚完成时会抑制下一次滚动触发的防抖布局；若紧接着发生脚注程序化滚动，该次变化会误消费抑制标志，
+    /// 导致不排队新布局，画面仍用旧视口块直至用户再滚动。
+    /// </summary>
+    public void RequestLayoutForViewportAfterProgrammaticScroll()
+    {
+        _scrollLayoutDebounceTimer?.Stop();
+        _suppressScrollLayoutAfterApply = false;
+        try
+        {
+            ClearPendingScrollRestore?.Invoke();
+            if (!TriggerLayoutOnlyIfCached())
+                TriggerParseAndLayout(null, null);
+            InvalidateVisual();
+        }
+        catch { }
+    }
+
     /// <summary>若已有解析缓存则仅触发布局（复用 blocks，传当前 scrollY 走 ComputeSlim），不阻塞 UI；返回 true 表示已提交布局任务。</summary>
     private bool TriggerLayoutOnlyIfCached()
     {
@@ -457,6 +490,7 @@ public class EngineRenderControl : Control
                         if (y.HasValue)
                         {
                             RequestScrollToY?.Invoke(Math.Max(0, y.Value - 20));
+                            RequestLayoutForViewportAfterProgrammaticScroll();
                             e.Handled = true;
                             return;
                         }
@@ -474,6 +508,7 @@ public class EngineRenderControl : Control
                             if (y.HasValue)
                             {
                                 RequestScrollToY?.Invoke(Math.Max(0, y.Value - 40));
+                                RequestLayoutForViewportAfterProgrammaticScroll();
                                 e.Handled = true;
                                 return;
                             }
@@ -487,6 +522,7 @@ public class EngineRenderControl : Control
                             if (y.HasValue)
                             {
                                 RequestScrollToY?.Invoke(Math.Max(0, y.Value - 40));
+                                RequestLayoutForViewportAfterProgrammaticScroll();
                                 e.Handled = true;
                                 return;
                             }

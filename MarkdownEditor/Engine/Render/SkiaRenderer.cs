@@ -163,8 +163,10 @@ public sealed class SkiaRenderer : ITextMeasurer
         else
         {
             var body = _bodyTypeface ??= ResolveBodyTypeface();
-            var fs = style
-                is RunStyle.Bold
+            var fs = style switch
+            {
+                RunStyle.BoldItalic or RunStyle.LinkBoldItalic => SKFontStyle.BoldItalic,
+                RunStyle.Bold
                     or RunStyle.Heading1
                     or RunStyle.Heading2
                     or RunStyle.Heading3
@@ -172,10 +174,10 @@ public sealed class SkiaRenderer : ITextMeasurer
                     or RunStyle.Heading5
                     or RunStyle.Heading6
                     or RunStyle.TableHeaderCell
-                ? SKFontStyle.Bold
-                : style is RunStyle.Italic or RunStyle.Math
-                    ? SKFontStyle.Italic
-                    : SKFontStyle.Normal;
+                    or RunStyle.LinkBold => SKFontStyle.Bold,
+                RunStyle.Italic or RunStyle.Math or RunStyle.LinkItalic => SKFontStyle.Italic,
+                _ => SKFontStyle.Normal
+            };
             font = new SKFont(SKTypeface.FromFamilyName(body.FamilyName, fs), size);
         }
         _fontCache[style] = font;
@@ -462,7 +464,9 @@ public sealed class SkiaRenderer : ITextMeasurer
                 canvas.ClipRect(run.Bounds, SKClipOperation.Intersect);
 
             var baseTextColor = _textPaint.Color;
-            var textColor = run.Style == RunStyle.Link
+            var isLinkStyle =
+                run.Style is RunStyle.Link or RunStyle.LinkBold or RunStyle.LinkItalic or RunStyle.LinkBoldItalic;
+            var textColor = isLinkStyle
                 ? FromLinkColor()
                 : IsCodeBlockHighlightStyle(run.Style)
                     ? GetCodeTokenColor(run.Style)
@@ -477,7 +481,7 @@ public sealed class SkiaRenderer : ITextMeasurer
             canvas.DrawText(drawText, textX, textY, font, _textPaint);
 
             if (
-                run.Style == RunStyle.Link
+                isLinkStyle
                 && (
                     run.LinkUrl == null
                     || !run.LinkUrl.StartsWith("footnote-back:", StringComparison.Ordinal)

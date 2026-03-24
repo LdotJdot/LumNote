@@ -49,6 +49,8 @@ public enum RunStyle
     Normal,
     Bold,
     Italic,
+    /// <summary>粗体+斜体（如 <c>***text***</c>）。</summary>
+    BoldItalic,
     Strikethrough,
     Code,
     /// <summary>代码块内：关键字（语法高亮）</summary>
@@ -62,6 +64,12 @@ public enum RunStyle
     /// <summary>代码块内：默认/其他</summary>
     CodeDefault,
     Link,
+    /// <summary>加粗链接（嵌套强调时保留可点击与下划线）。</summary>
+    LinkBold,
+    /// <summary>斜体链接。</summary>
+    LinkItalic,
+    /// <summary>粗斜链接。</summary>
+    LinkBoldItalic,
     Image,
     Heading1,
     Heading2,

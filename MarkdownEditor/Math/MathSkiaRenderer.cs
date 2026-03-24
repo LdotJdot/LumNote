@@ -75,6 +75,44 @@ public static partial class MathSkiaRenderer
         return sb.ToString().Trim();
     }
 
+    /// <summary>取字符串第一个标量码位（含 UTF-16 代理对）。</summary>
+    private static int GetFirstCodePoint(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return 0;
+        if (text.Length >= 2 && char.IsSurrogatePair(text[0], text[1]))
+            return char.ConvertToUtf32(text, 0);
+        return text[0];
+    }
+
+    /// <summary>Unicode Mathematical Alphanumeric Symbols：字形本身已是斜体/粗体等样式，勿再对字体请求 Italic。</summary>
+    private static bool IsMathematicalAlphanumericCodePoint(int cp) => cp is >= 0x1D400 and <= 0x1D7FF;
+
+    /// <summary>
+    /// 将单字符 ASCII 拉丁字母映射为数学斜体码位（与 TeX 默认变量样式一致）。
+    /// OpenType Math 字体通常在 Regular 面提供这些字形，而传统 SKFontStyle.Italic 子字体往往不存在。
+    /// </summary>
+    private static bool TryMapLatinLetterToMathematicalItalic(string text, out string mapped)
+    {
+        mapped = text;
+        if (string.IsNullOrEmpty(text) || text.Length != 1)
+            return false;
+        var c = text[0];
+        if (c > 0x007F)
+            return false;
+        if (c >= 'A' && c <= 'Z')
+        {
+            mapped = char.ConvertFromUtf32(0x1D434 + (c - 'A'));
+            return true;
+        }
+        if (c >= 'a' && c <= 'z')
+        {
+            mapped = char.ConvertFromUtf32(0x1D44E + (c - 'a'));
+            return true;
+        }
+        return false;
+    }
+
     private static MathNode GetOrParseRoot(string latex)
     {
         lock (_parseCacheLock)
@@ -200,10 +238,31 @@ public static partial class MathSkiaRenderer
         /// </summary>
         public SKFont CreateMathFont(float scale = 1.0f, bool italic = false, bool bold = false)
         {
-            // 对于数学公式，保持整套字体的一致性比“伪粗体/伪斜体”更重要。
-            // 这里直接使用已解析好的 MathTypeface 创建字体尺寸，避免再次通过 FamilyName 查找
-            // 而导致从文件加载的数学字体（如 Latin Modern Math）被系统默认字体替换。
-            return new SKFont(MathTypeface, BaseFontSize * scale);
+            // 优先尝试同族的 Bold/Italic 面；多数 OpenType Math 仅为单 Regular 面，此时依赖 Unicode 数学字形或下方 SkewX。
+            var style = bold && italic
+                ? SKFontStyle.BoldItalic
+                : bold
+                    ? SKFontStyle.Bold
+                    : italic
+                        ? SKFontStyle.Italic
+                        : SKFontStyle.Normal;
+            SKTypeface tf = MathTypeface;
+            if (style != SKFontStyle.Normal)
+            {
+                var family = MathTypeface.FamilyName;
+                if (!string.IsNullOrWhiteSpace(family))
+                {
+                    var resolved = SKTypeface.FromFamilyName(family, style);
+                    if (resolved != null)
+                        tf = resolved;
+                }
+            }
+
+            var font = new SKFont(tf, BaseFontSize * scale);
+            // 仍无斜体面时（常见于 .otf 单面数学字体），对变量用轻微倾斜，避免与正体数字/运算符混淆。
+            if (italic && !bold && tf.FontStyle.Slant == SKFontStyleSlant.Upright)
+                font.SkewX = -0.22f;
+            return font;
         }
 
         /// <summary>
@@ -237,31 +296,27 @@ public static partial class MathSkiaRenderer
             if (string.IsNullOrEmpty(text))
                 return CreateMathFont(scale, italic: italicPreferred);
 
-            var c = text[0];
+            int cp = GetFirstCodePoint(text);
+            if (IsMathematicalAlphanumericCodePoint(cp))
+                return CreateMathFont(scale, italic: false, bold: false);
 
-            // ASCII 拉丁字母与数字：数学字体
-            if (c <= 0x007F && (char.IsLetterOrDigit(c) || c == ' '))
+            var c = (char)cp;
+            if (cp <= 0x007F && (char.IsLetterOrDigit(c) || c == ' '))
                 return CreateMathFont(scale, italic: italicPreferred);
 
-            // 希腊字母及扩展希腊：统一数学字体，避免同一公式内混用多种字体
-            if (IsGreekOrMathLetter(c))
+            if (IsGreekOrMathCodePoint(cp))
                 return CreateMathFont(scale, italic: italicPreferred);
 
-            // CJK、标点等用 MatchCharacter 回退
             var fm = SKFontManager.Default;
-            var fallbackTf = fm.MatchCharacter(c);
+            var fallbackTf = cp <= char.MaxValue ? fm.MatchCharacter((char)cp) : null;
             if (fallbackTf != null)
                 return new SKFont(fallbackTf, BaseFontSize * scale);
 
             return CreateMathFont(scale, italic: italicPreferred);
         }
 
-        private static bool IsGreekOrMathLetter(char c)
-        {
-            var u = (uint)c;
-            return (u >= 0x0370 && u <= 0x03FF) // Greek and Coptic
-                || (u >= 0x1F00 && u <= 0x1FFF); // Greek Extended
-        }
+        private static bool IsGreekOrMathCodePoint(int cp) =>
+            (cp >= 0x0370 && cp <= 0x03FF) || (cp >= 0x1F00 && cp <= 0x1FFF);
     }
 
     private abstract class Box
@@ -792,8 +847,15 @@ public static partial class MathSkiaRenderer
             case MathSymbol sym:
             {
                 var italic = ShouldItalicize(sym.Text);
-                var font = ctx.CreateSymbolFont(sym.Text, scale, italicPreferred: italic);
-                return new SymbolBox(sym.Text, font, textPaint);
+                var drawText = sym.Text;
+                // 单字母拉丁变量：用 Unicode 数学斜体区段（OpenType Math 的 Regular 面即含这些字形）
+                if (italic && TryMapLatinLetterToMathematicalItalic(sym.Text, out var mathItalic))
+                {
+                    drawText = mathItalic;
+                    italic = false;
+                }
+                var font = ctx.CreateSymbolFont(drawText, scale, italicPreferred: italic);
+                return new SymbolBox(drawText, font, textPaint);
             }
             case MathText txt:
             {

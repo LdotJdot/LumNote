@@ -54,9 +54,16 @@ public partial class MainWindow : Window
         return _appIcon;
     }
 
-    private ScrollViewer? _editorScroll;
-    private ScrollViewer? _previewScroll;
-    private bool _isSyncingScroll;
+    private DocumentItem? _documentTabContextTarget;
+    private MenuFlyout? _documentTabContextFlyout;
+
+    /// <summary>自本次 Ctrl 按下起是否出现过 Ctrl+其它键；为 true 时本次 Ctrl 松开不算「纯 Ctrl」。</summary>
+    private bool _editorCtrlSessionHadCombo;
+
+    /// <summary>已有一次「纯 Ctrl」松开，正在等第二次纯 Ctrl 松开（600ms 内）。</summary>
+    private bool _awaitingSecondCleanCtrlUp;
+
+    private long _firstCleanCtrlUpMs;
     private bool _isClosingProgrammatically;
     private readonly DispatcherTimer _searchDebounceTimer;
     /// <summary>标记当前是否需要拦截下一次 Alt 键抬起事件，避免 Alt 组合键操作后激活菜单访问键。</summary>
@@ -106,7 +113,8 @@ public partial class MainWindow : Window
         Opened += (_, _) =>
         {
             ApplyThemeFromConfig(vm);
-            SetupScrollSync();
+            EditorTextBox.TextArea.AddHandler(InputElement.KeyDownEvent, EditorTextAreaOnKeyDown, RoutingStrategies.Tunnel);
+            EditorTextBox.TextArea.AddHandler(InputElement.KeyUpEvent, EditorTextAreaOnKeyUp, RoutingStrategies.Tunnel);
             SetupDiffPaneEditors(vm);
             RegisterAutoSaveDialogs(vm);
             if (PreviewEngine != null && DataContext is MainViewModel m)
@@ -185,16 +193,21 @@ public partial class MainWindow : Window
         SaveMenuItem.Click += async (_, _) =>
         {
             if (string.IsNullOrEmpty(vm.CurrentFilePath))
-                await DoSaveAsAsync(vm);
+                _ = await DoSaveAsAsync(vm);
             else
                 vm.SaveCurrent();
         };
 
-        SaveAsMenuItem.Click += async (_, _) => await DoSaveAsAsync(vm);
+        SaveAsMenuItem.Click += async (_, _) => _ = await DoSaveAsAsync(vm);
 
         CloseEditorMenuItem.Click += async (_, _) => await ConfirmCloseCurrentEditorAsync(vm);
 
         ExitMenuItem.Click += async (_, _) => await ConfirmExitAsync(vm);
+        ShortcutsHelpMenuItem.Click += (_, _) =>
+        {
+            var w = new ShortcutsHelpWindow();
+            w.Show(this);
+        };
         AboutMenuItem.Click += (_, _) => ShowAboutDialog();
 
         ExportHtmlMenuItem.Click += async (_, _) => await DoExportAsync(vm, "html");
@@ -289,8 +302,7 @@ public partial class MainWindow : Window
                 vm.ActivePane = "Preview";
                 Dispatcher.UIThread.Post(() =>
                 {
-                    _previewScroll?.Focus();
-                    if (_previewScroll == null) PreviewEngine?.Focus();
+                    PreviewEngine?.Focus();
                 }, DispatcherPriority.Input);
             }, RoutingStrategies.Tunnel);
         }
@@ -536,31 +548,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SetupScrollSync()
-    {
-        // 查找左侧编辑控件内部的 ScrollViewer（TextEditor 内部同样包含 ScrollViewer）
-        _editorScroll = EditorTextBox
-            .GetVisualDescendants()
-            .OfType<ScrollViewer>()
-            .FirstOrDefault();
-
-        // 查找右侧预览控件中的 ScrollViewer
-        _previewScroll = PreviewEngine.FindControl<ScrollViewer>("Scroll");
-
-        if (_editorScroll != null)
-            _editorScroll.ScrollChanged += EditorScrollOnScrollChanged;
-
-        if (_previewScroll != null)
-        {
-            _previewScroll.ScrollChanged += PreviewScrollOnScrollChanged;
-            _previewScroll.GotFocus += (_, _) =>
-            {
-                if (DataContext is MainViewModel m)
-                    m.ActivePane = "Preview";
-            };
-        }
-    }
-
     private void FileTreeListOnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (e.Source is not Control control || DataContext is not MainViewModel vm)
@@ -787,48 +774,81 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>重命名 TextBox 加载后获得焦点并全选；并注册 Tunnel KeyDown，在 TreeView 之前处理 Enter/Escape，避免卡在编辑状态。</summary>
+    private static readonly object FileTreeRenameTextBoxHandlersRegistered = new();
+
+    /// <summary>
+    /// 文件树重命名框：首次 Loaded 时注册按键与可见性监听。
+    /// IsVisible 随 IsRenaming 切换时不会再次触发 Loaded，故需在 IsVisible 变为 true 时再次聚焦并全选。
+    /// </summary>
     private void TreeItemRenameTextBox_OnLoaded(object? sender, RoutedEventArgs e)
     {
-        if (sender is not Avalonia.Controls.TextBox box || box.DataContext is not FileTreeNode node || !node.IsRenaming)
+        if (sender is not Avalonia.Controls.TextBox box || box.DataContext is not FileTreeNode)
             return;
-        // Tunnel 阶段处理按键，确保在 TreeView 展开/折叠之前提交或取消重命名
-        void OnPreviewKeyDown(object? s, KeyEventArgs ev)
+        if (!ReferenceEquals(box.Tag, FileTreeRenameTextBoxHandlersRegistered))
         {
-            if (ev.Key == Key.Enter)
+            box.Tag = FileTreeRenameTextBoxHandlersRegistered;
+            void OnPreviewKeyDown(object? s, KeyEventArgs ev)
             {
-                CommitTreeItemRename(box);
-                ev.Handled = true;
+                if (box.DataContext is not FileTreeNode n || !n.IsRenaming)
+                    return;
+                if (ev.Key == Key.Enter)
+                {
+                    CommitTreeItemRename(box);
+                    ev.Handled = true;
+                }
+                else if (ev.Key == Key.Escape)
+                {
+                    n.IsRenaming = false;
+                    n.EditName = n.DisplayName;
+                    ev.Handled = true;
+                }
             }
-            else if (ev.Key == Key.Escape)
+            box.AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
+            box.PropertyChanged += (_, args) =>
             {
-                node.IsRenaming = false;
-                node.EditName = node.DisplayName;
-                ev.Handled = true;
-            }
+                if (!ReferenceEquals(args.Property, Visual.IsVisibleProperty))
+                    return;
+                if (!box.IsVisible || box.DataContext is not FileTreeNode n || !n.IsRenaming)
+                    return;
+                ScheduleFocusAndSelectRenameTextBox(box);
+            };
         }
-        box.AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
-        // 延迟一帧再聚焦，减少“新建文件夹后立即重命名”时编辑器失焦触发的 VisualLinesInvalidException
-        Dispatcher.UIThread.Post(() =>
-        {
-            Dispatcher.UIThread.Post(() =>
+
+        if (box.IsVisible && box.DataContext is FileTreeNode node && node.IsRenaming)
+            ScheduleFocusAndSelectRenameTextBox(box);
+    }
+
+    /// <summary>延迟两帧聚焦并全选，避免与模板/布局抢焦点（如新建项后立即重命名）。</summary>
+    private static void ScheduleFocusAndSelectRenameTextBox(Avalonia.Controls.TextBox box)
+    {
+        Dispatcher.UIThread.Post(
+            () =>
             {
-                try
-                {
-                    box.Focus();
-                    var len = box.Text?.Length ?? 0;
-                    if (len > 0)
+                Dispatcher.UIThread.Post(
+                    () =>
                     {
-                        box.SelectionStart = 0;
-                        box.SelectionEnd = len;
-                    }
-                }
-                catch
-                {
-                    // 控件已脱离视觉树等时忽略
-                }
-            }, DispatcherPriority.Loaded);
-        }, DispatcherPriority.Loaded);
+                        try
+                        {
+                            if (!box.IsVisible)
+                                return;
+                            box.Focus();
+                            var len = box.Text?.Length ?? 0;
+                            if (len > 0)
+                            {
+                                box.SelectionStart = 0;
+                                box.SelectionEnd = len;
+                            }
+                        }
+                        catch
+                        {
+                            // 控件已脱离视觉树等时忽略
+                        }
+                    },
+                    DispatcherPriority.Loaded
+                );
+            },
+            DispatcherPriority.Loaded
+        );
     }
 
     private void TreeItemRename_OnLostFocus(object? sender, RoutedEventArgs e)
@@ -859,7 +879,7 @@ public partial class MainWindow : Window
             await ShowRenameErrorDialogAsync(error);
     }
 
-    /// <summary>标签页行为：记录后退栈 + 处理中键/关闭按钮关闭时的保存确认。</summary>
+    /// <summary>标签页行为：记录后退栈 + 中键关闭 + 右键菜单 + 关闭按钮。</summary>
     private void SetupDocumentTabBackStack(MainViewModel vm)
     {
         if (DocumentTabControl == null) return;
@@ -871,17 +891,37 @@ public partial class MainWindow : Window
                 vm.RecordLocation(prev.FullPath, prev.LastCaretOffset);
         };
 
-        // 中键点击标签关闭
+        SetupDocumentTabContextFlyout(vm);
+
+        // 中键关闭 / 右键菜单
         DocumentTabControl.AddHandler(
             PointerReleasedEvent,
             async (_, e) =>
             {
-                if (e.GetCurrentPoint(DocumentTabControl).Properties.PointerUpdateKind != PointerUpdateKind.MiddleButtonReleased)
+                var kind = e.GetCurrentPoint(DocumentTabControl).Properties.PointerUpdateKind;
+                if (kind == PointerUpdateKind.RightButtonReleased)
+                {
+                    if (e.Source is not Control c || DataContext is not MainViewModel m)
+                        return;
+                    var tab = c.GetVisualAncestors().OfType<TabItem>().FirstOrDefault();
+                    if (tab?.DataContext is not DocumentItem item)
+                        return;
+                    _documentTabContextTarget = item;
+                    if (_documentTabContextFlyout != null)
+                    {
+                        _documentTabContextFlyout.ShowAt(tab, showAtPointer: true);
+                        e.Handled = true;
+                    }
+
                     return;
-                if (e.Source is not Control c || c.DataContext is not DocumentItem item || DataContext is not MainViewModel m)
+                }
+
+                if (kind != PointerUpdateKind.MiddleButtonReleased)
+                    return;
+                if (e.Source is not Control c2 || c2.DataContext is not DocumentItem item2 || DataContext is not MainViewModel m2)
                     return;
 
-                bool closed = await ConfirmCloseDocumentAsync(m, item);
+                bool closed = await ConfirmCloseDocumentAsync(m2, item2);
                 if (closed)
                     e.Handled = true;
             },
@@ -927,81 +967,294 @@ public partial class MainWindow : Window
         {
             if (string.IsNullOrEmpty(item.FullPath))
             {
-                await DoSaveAsAsync(vm);
-                // 新建文档保存后 SaveToPath 已移除未命名文档并打开保存后的文件，item 已不在列表中
-            }
-            else
-            {
-                vm.SaveCurrent();
-                vm.CloseDocument(item);
+                if (!await DoSaveAsAsync(vm))
+                    return false;
+                // 新建文档保存后 SaveToPath 已移除未命名文档并打开保存后的文件，item 可能已不在列表中
                 return true;
             }
-        }
-        else
+
+            vm.SaveCurrent();
             vm.CloseDocument(item);
+            return true;
+        }
+
+        vm.CloseDocument(item);
         return true;
     }
 
-    /// <summary>编辑区上下 Padding 总高度（用于按内容高度同步滚动，减少留白导致的偏移）。</summary>
-    private const double EditorVerticalPaddingTotal = 16;
-    private const double EditorTopPadding = 8;
-
-    private void EditorScrollOnScrollChanged(object? sender, ScrollChangedEventArgs e)
+    private void SetupDocumentTabContextFlyout(MainViewModel vm)
     {
-        if (_isSyncingScroll || _editorScroll == null || _previewScroll == null)
-            return;
-        if (DataContext is MainViewModel vm && vm.SkipEditorToPreviewScrollSync)
-            return;
+        var reload = new MenuItem { Header = "重新加载" };
+        reload.Click += async (_, _) =>
+        {
+            var t = _documentTabContextTarget;
+            if (t != null && DataContext is MainViewModel m)
+                await ReloadDocumentTabFromDiskAsync(m, t);
+        };
+        var close = new MenuItem { Header = "关闭" };
+        close.Click += async (_, _) =>
+        {
+            var t = _documentTabContextTarget;
+            if (t != null && DataContext is MainViewModel m)
+                await ConfirmCloseDocumentAsync(m, t);
+        };
+        var saveClose = new MenuItem { Header = "保存并关闭" };
+        saveClose.Click += async (_, _) =>
+        {
+            var t = _documentTabContextTarget;
+            if (t != null && DataContext is MainViewModel m)
+                await SaveAndCloseDocumentAsync(m, t);
+        };
+        var closeOthers = new MenuItem { Header = "关闭其他" };
+        closeOthers.Click += async (_, _) =>
+        {
+            var t = _documentTabContextTarget;
+            if (t != null && DataContext is MainViewModel m)
+                await CloseOtherDocumentsAsync(m, t);
+        };
+        var closeAll = new MenuItem { Header = "关闭全部" };
+        closeAll.Click += async (_, _) =>
+        {
+            if (DataContext is MainViewModel m)
+                await CloseAllDocumentsAsync(m);
+        };
 
-        _isSyncingScroll = true;
-        try
+        _documentTabContextFlyout = new MenuFlyout
         {
-            SyncScrollEditorToPreview();
+            Items =
+            {
+                reload,
+                new MenuItem { Header = "-" },
+                close,
+                saveClose,
+                new MenuItem { Header = "-" },
+                closeOthers,
+                closeAll,
+            },
+        };
+    }
+
+    private async Task ReloadDocumentTabFromDiskAsync(MainViewModel vm, DocumentItem item)
+    {
+        if (string.IsNullOrWhiteSpace(item.FullPath))
+        {
+            await ShowSimpleInfoDialogAsync("重新加载", "未命名文档没有磁盘路径，无法重新加载。");
+            return;
         }
-        finally
+
+        if (!File.Exists(item.FullPath))
         {
-            _isSyncingScroll = false;
+            await ShowSimpleInfoDialogAsync("重新加载", "文件在磁盘上不存在，无法重新加载。");
+            return;
+        }
+
+        if (item.IsModified)
+        {
+            if (!await ShowReloadDiscardUnsavedDialogAsync(item.DisplayName))
+                return;
+        }
+
+        vm.ReloadDocumentFromDisk(item);
+    }
+
+    private async Task ShowSimpleInfoDialogAsync(string title, string message)
+    {
+        var dlg = new Window
+        {
+            Title = title,
+            Width = 400,
+            MaxWidth = 480,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Icon = GetAppIcon(),
+        };
+        var ok = new Button { Content = "确定", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right };
+        ok.Click += (_, _) => dlg.Close();
+        dlg.Content = new StackPanel
+        {
+            Margin = new Thickness(16),
+            Spacing = 12,
+            Children =
+            {
+                new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, MaxWidth = 368 },
+                ok,
+            },
+        };
+        await dlg.ShowDialog(this);
+    }
+
+    private async Task<bool> ShowReloadDiscardUnsavedDialogAsync(string displayName)
+    {
+        bool confirm = false;
+        var dlg = new Window
+        {
+            Title = "重新加载",
+            Width = 440,
+            MaxWidth = 520,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Icon = GetAppIcon(),
+        };
+        var yes = new Button { Content = "重新加载", Margin = new Thickness(0, 0, 8, 0) };
+        yes.Click += (_, _) =>
+        {
+            confirm = true;
+            dlg.Close();
+        };
+        var no = new Button { Content = "取消" };
+        no.Click += (_, _) => dlg.Close();
+        var buttons = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Children = { yes, no },
+        };
+        dlg.Content = new StackPanel
+        {
+            Margin = new Thickness(16),
+            Spacing = 12,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text =
+                        $"「{displayName}」有未保存的修改。\n\n从磁盘重新加载将丢弃这些修改，是否继续？",
+                    TextWrapping = TextWrapping.Wrap,
+                    MaxWidth = 400,
+                },
+                buttons,
+            },
+        };
+        await dlg.ShowDialog(this);
+        return confirm;
+    }
+
+    private async Task SaveAndCloseDocumentAsync(MainViewModel vm, DocumentItem item)
+    {
+        if (vm.ActiveDocument != item)
+            vm.ActiveDocument = item;
+        if (string.IsNullOrEmpty(item.FullPath))
+        {
+            if (!await DoSaveAsAsync(vm))
+                return;
+            return;
+        }
+
+        vm.SaveCurrent();
+        if (vm.OpenDocuments.Contains(item))
+            vm.CloseDocument(item);
+    }
+
+    private async Task CloseOtherDocumentsAsync(MainViewModel vm, DocumentItem keep)
+    {
+        foreach (var doc in vm.OpenDocuments.ToList())
+        {
+            if (ReferenceEquals(doc, keep))
+                continue;
+            if (!await ConfirmCloseDocumentAsync(vm, doc))
+                return;
         }
     }
 
-    private void PreviewScrollOnScrollChanged(object? sender, ScrollChangedEventArgs e)
+    private async Task CloseAllDocumentsAsync(MainViewModel vm)
     {
-        if (_isSyncingScroll || _editorScroll == null || _previewScroll == null)
+        foreach (var doc in vm.OpenDocuments.ToList())
+        {
+            if (!await ConfirmCloseDocumentAsync(vm, doc))
+                return;
+        }
+    }
+
+    /// <summary>
+    /// 编辑区连续两次「仅 Ctrl、无组合键」：在第二次松开 Ctrl 时让预览滚到光标附近；若当前为「仅编辑」则先切「编辑+预览」。
+    /// Ctrl+C 等任意 Ctrl 组合会取消本次序列，且该次松开 Ctrl 不计入双击。
+    /// </summary>
+    private void EditorTextAreaOnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl)
+        {
+            _editorCtrlSessionHadCombo = false;
+            return;
+        }
+
+        if ((e.KeyModifiers & KeyModifiers.Control) != 0)
+            _editorCtrlSessionHadCombo = true;
+    }
+
+    private void EditorTextAreaOnKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not Key.LeftCtrl and not Key.RightCtrl)
             return;
 
-        _isSyncingScroll = true;
-        try
+        if (_editorCtrlSessionHadCombo)
         {
-            SyncScrollPreviewToEditor();
+            _awaitingSecondCleanCtrlUp = false;
+            _editorCtrlSessionHadCombo = false;
+            return;
         }
-        finally
+
+        long now = Environment.TickCount64;
+        if (_awaitingSecondCleanCtrlUp)
         {
-            _isSyncingScroll = false;
+            long dt = now - _firstCleanCtrlUpMs;
+            if (dt >= 0 && dt <= 600)
+            {
+                _awaitingSecondCleanCtrlUp = false;
+                e.Handled = true;
+                TryScrollPreviewToCaret();
+                return;
+            }
         }
+
+        _firstCleanCtrlUpMs = now;
+        _awaitingSecondCleanCtrlUp = true;
+        _editorCtrlSessionHadCombo = false;
     }
 
-    private void SyncScrollEditorToPreview()
+    private void TryScrollPreviewToCaret()
     {
-        if (_editorScroll == null || _previewScroll == null) return;
-        var contentHeight = Math.Max(0, _editorScroll.Extent.Height - EditorVerticalPaddingTotal);
-        var editorScrollable = Math.Max(0, contentHeight - _editorScroll.Viewport.Height);
-        var contentOffset = Math.Max(0, _editorScroll.Offset.Y - EditorTopPadding);
-        var percent = editorScrollable > 0 ? Math.Clamp(contentOffset / editorScrollable, 0, 1) : 0;
-        var targetMax = Math.Max(0, _previewScroll.Extent.Height - _previewScroll.Viewport.Height);
-        if (targetMax <= 0) return;
-        _previewScroll.Offset = new Vector(_previewScroll.Offset.X, targetMax * percent);
-    }
+        if (DataContext is not MainViewModel vm)
+            return;
+        if (vm.IsDiffCompareActive)
+            return;
+        if (!vm.ShowEditorPaneForCurrentDoc)
+            return;
+        if (!vm.ShowMarkdownPreview)
+            return;
+        if (EditorTextBox is not TextEditor editor || editor.Document == null)
+            return;
 
-    private void SyncScrollPreviewToEditor()
-    {
-        if (_editorScroll == null || _previewScroll == null) return;
-        var sourceMax = Math.Max(0, _previewScroll.Extent.Height - _previewScroll.Viewport.Height);
-        if (sourceMax <= 0) return;
-        var percent = Math.Clamp(_previewScroll.Offset.Y / sourceMax, 0, 1);
-        var contentHeight = Math.Max(0, _editorScroll.Extent.Height - EditorVerticalPaddingTotal);
-        var editorScrollable = Math.Max(0, contentHeight - _editorScroll.Viewport.Height);
-        var newY = EditorTopPadding + percent * editorScrollable;
-        _editorScroll.Offset = new Vector(_editorScroll.Offset.X, newY);
+        int offset = editor.TextArea.Caret.Offset;
+
+        void AttemptScroll(int attempt)
+        {
+            var rc = PreviewEngine?.RenderControl;
+            if (rc == null)
+                return;
+            if (rc.TryScrollToDocumentOffset(offset))
+            {
+                vm.ActivePane = "Preview";
+                return;
+            }
+
+            if (attempt < 4)
+                Dispatcher.UIThread.Post(() => AttemptScroll(attempt + 1), DispatcherPriority.Loaded);
+        }
+
+        if (vm.LayoutMode == EditorLayoutMode.EditorOnly)
+        {
+            vm.LayoutMode = EditorLayoutMode.Both;
+            ApplyLayout(EditorLayoutMode.Both);
+            Dispatcher.UIThread.Post(
+                () => Dispatcher.UIThread.Post(() => AttemptScroll(0), DispatcherPriority.Loaded),
+                DispatcherPriority.Loaded
+            );
+            return;
+        }
+
+        AttemptScroll(0);
     }
 
     private void ApplyThemeFromConfig(MainViewModel vm)
@@ -2203,7 +2456,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async System.Threading.Tasks.Task DoSaveAsAsync(MainViewModel vm)
+    private async Task<bool> DoSaveAsAsync(MainViewModel vm)
     {
         var options = new FilePickerSaveOptions
         {
@@ -2215,7 +2468,12 @@ public partial class MainWindow : Window
             options.SuggestedFileName = "未命名.md";
         var file = await StorageProvider.SaveFilePickerAsync(options);
         if (file != null && file.TryGetLocalPath() is { } path)
+        {
             vm.SaveToPath(path);
+            return true;
+        }
+
+        return false;
     }
 
     private async System.Threading.Tasks.Task DoExportAsync(MainViewModel vm, string formatId)
@@ -2433,7 +2691,7 @@ public partial class MainWindow : Window
             Spacing = 10,
             Children =
             {
-                Para("Ver 1.0.0.2 @ 2026", FontWeight.SemiBold),
+                Para("Ver 1.0.0.3 @ 2026", FontWeight.SemiBold),
                 Para(
                     "We built this to solve our own problems. Now we maintain it to solve yours. Free forever. Works offline. No accounts, no tracking, no expiration date. Just a reliable tool that grows with you."
                 ),
@@ -2468,8 +2726,8 @@ public partial class MainWindow : Window
         {
             if (string.IsNullOrEmpty(vm.CurrentFilePath))
             {
-                await DoSaveAsAsync(vm);
-                // 新建文档保存后 SaveToPath 已用保存的文件替换当前标签，无需再关闭
+                if (!await DoSaveAsAsync(vm))
+                    return;
             }
             else
             {
@@ -2502,7 +2760,10 @@ public partial class MainWindow : Window
             if (dialog.Result == ConfirmCloseResult.Save)
             {
                 if (string.IsNullOrEmpty(doc.FullPath))
-                    await DoSaveAsAsync(vm);
+                {
+                    if (!await DoSaveAsAsync(vm))
+                        return;
+                }
                 else
                     vm.SaveCurrent();
             }
