@@ -41,7 +41,17 @@
 
   <!-- 将 Latin Modern Math 字体文件一并复制到输出目录，供 Skia 运行时从文件加载 -->
   <ItemGroup>
-    <Content Include="asserts\otf\latinmodern-math.otf">
+    <Content Include="asserts\otf\latinmodern-math.otf" Condition="Exists('asserts\otf\latinmodern-math.otf')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\_build_out\asserts\otf\latinmodern-math.otf"
+             Condition="!Exists('asserts\otf\latinmodern-math.otf') and Exists('..\_build_out\asserts\otf\latinmodern-math.otf')"
+             Link="asserts\otf\latinmodern-math.otf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\_chk\asserts\otf\latinmodern-math.otf"
+             Condition="!Exists('asserts\otf\latinmodern-math.otf') and !Exists('..\_build_out\asserts\otf\latinmodern-math.otf') and Exists('..\_chk\asserts\otf\latinmodern-math.otf')"
+             Link="asserts\otf\latinmodern-math.otf">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
