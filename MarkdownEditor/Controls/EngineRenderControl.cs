@@ -133,6 +133,8 @@ public class EngineRenderControl : Control
     /// <summary>按全文字符偏移滚动预览（如编辑区连按两次 Ctrl 对齐光标）。成功返回 true。</summary>
     public bool TryScrollToDocumentOffset(int documentOffset)
     {
+        if (!_liveRenderUpdatesEnabled)
+            return false;
         var engine = GetOrCreateEngine();
         if (engine == null || Document == null)
             return false;
@@ -153,6 +155,24 @@ public class EngineRenderControl : Control
     public bool IsLayoutPending => _isLayoutPending;
 
     private bool _isLayoutPending;
+
+    /// <summary>
+    /// 为 false 时跳过解析/滚动触发布局（仅编辑、Git 比对等场景下由父级关闭，避免无效渲染）。
+    /// </summary>
+    public bool LiveRenderUpdatesEnabled
+    {
+        get => _liveRenderUpdatesEnabled;
+        set
+        {
+            if (_liveRenderUpdatesEnabled == value)
+                return;
+            _liveRenderUpdatesEnabled = value;
+            if (!value)
+                _scrollLayoutDebounceTimer?.Stop();
+        }
+    }
+
+    private bool _liveRenderUpdatesEnabled = true;
 
     public EngineRenderControl()
     {
@@ -243,6 +263,8 @@ public class EngineRenderControl : Control
     /// <summary>触发后台解析+布局任务，完成后在 UI 线程应用快照并刷新。</summary>
     private void TriggerParseAndLayout(int? lineStart, int? lineEnd)
     {
+        if (!_liveRenderUpdatesEnabled)
+            return;
         var doc = Document;
         if (doc == null)
             return;
@@ -333,6 +355,8 @@ public class EngineRenderControl : Control
     /// <summary>滚动偏移变化时立即重绘；布局则防抖，停止滚动约 ScrollLayoutDebounceMs 后再触发，避免实时布局卡顿。</summary>
     private void OnScrollOffsetChanged()
     {
+        if (!_liveRenderUpdatesEnabled)
+            return;
         InvalidateVisual();
         if (_suppressNextScrollLayout)
         {
@@ -368,6 +392,8 @@ public class EngineRenderControl : Control
     /// </summary>
     public void RequestLayoutForViewportAfterProgrammaticScroll()
     {
+        if (!_liveRenderUpdatesEnabled)
+            return;
         _scrollLayoutDebounceTimer?.Stop();
         _suppressScrollLayoutAfterApply = false;
         try
@@ -843,6 +869,10 @@ public class EngineRenderControl : Control
             e.Handled = true;
         }
     }
+
+    /// <summary>是否存在可复制的文本选区（供右键「复制」是否可用）。</summary>
+    public bool HasTextSelection =>
+        _selection is { } sel && !sel.IsEmpty && Document != null;
 
     /// <summary>将当前选区文本写入剪贴板。供本控件 KeyDown 与窗口 Ctrl+C 统一调用。有选区且写入成功返回 true。</summary>
     public async System.Threading.Tasks.Task<bool> TryCopySelectionToClipboardAsync()

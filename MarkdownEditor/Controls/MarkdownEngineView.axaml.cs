@@ -29,6 +29,16 @@ public partial class MarkdownEngineView : UserControl
         double
     >(nameof(ZoomLevel), 1.0);
 
+    /// <summary>为 false 时不解析/不布局预览（仅编辑、图片、Git 比对等场景由绑定关闭）。</summary>
+    public static readonly StyledProperty<bool> MarkdownPreviewUpdatesEnabledProperty =
+        AvaloniaProperty.Register<MarkdownEngineView, bool>(nameof(MarkdownPreviewUpdatesEnabled), defaultValue: true);
+
+    public bool MarkdownPreviewUpdatesEnabled
+    {
+        get => GetValue(MarkdownPreviewUpdatesEnabledProperty);
+        set => SetValue(MarkdownPreviewUpdatesEnabledProperty, value);
+    }
+
     public double ZoomLevel
     {
         get => GetValue(ZoomLevelProperty);
@@ -72,10 +82,31 @@ public partial class MarkdownEngineView : UserControl
             }
         };
 
+        MarkdownPreviewUpdatesEnabledProperty.Changed.AddClassHandler<MarkdownEngineView>(
+            (c, _) =>
+            {
+                if (c.RenderControl != null)
+                {
+                    c.RenderControl.LiveRenderUpdatesEnabled = c.MarkdownPreviewUpdatesEnabled;
+                    if (c.MarkdownPreviewUpdatesEnabled)
+                        c.RenderControl.ResetEngine();
+                }
+                c._debounce?.Stop();
+                if (c.MarkdownPreviewUpdatesEnabled)
+                {
+                    // 失活期间未随 Markdown 更新，恢复预览时强制走完整解析
+                    c._lastMarkdown = null;
+                    c.UpdateDocument();
+                }
+            }
+        );
+
         MarkdownProperty.Changed.AddClassHandler<MarkdownEngineView>(
             (c, e) =>
             {
                 var view = c;
+                if (!view.MarkdownPreviewUpdatesEnabled)
+                    return;
                 view._debounce?.Stop();
                 var newMd = view.Markdown ?? "";
                 // 首次从空内容切换到有内容时，直接触发布局，避免初始化阶段预览长时间空白。
@@ -104,6 +135,11 @@ public partial class MarkdownEngineView : UserControl
                 if (c.RenderControl != null)
                 {
                     c.RenderControl.StyleConfig = c.StyleConfig;
+                    if (!c.MarkdownPreviewUpdatesEnabled)
+                    {
+                        c.RenderControl.InvalidateVisual();
+                        return;
+                    }
                     // 主题/样式发生变化时，重建引擎并重新布局，以便立即刷新背景与文本样式。
                     c.RenderControl.ResetEngine();
                     if (c.Markdown != null)
@@ -122,6 +158,11 @@ public partial class MarkdownEngineView : UserControl
             (c, _) =>
             {
                 if (c.RenderControl == null) return;
+                if (!c.MarkdownPreviewUpdatesEnabled)
+                {
+                    c.RenderControl.InvalidateVisual();
+                    return;
+                }
                 c.RenderControl.ResetEngine();
                 if (c.Markdown != null)
                     c.RenderControl.RequestParseAndLayout();
@@ -166,12 +207,13 @@ public partial class MarkdownEngineView : UserControl
         {
             RenderControl.StyleConfig = StyleConfig;
             RenderControl.DocumentBasePath = (DataContext is MainViewModel vm) ? (vm.DocumentBasePath ?? "") : "";
+            RenderControl.LiveRenderUpdatesEnabled = MarkdownPreviewUpdatesEnabled;
             RenderControl.LayoutApplied -= OnRenderControlLayoutApplied;
             RenderControl.LayoutApplied += OnRenderControlLayoutApplied;
             RenderControl.ClearPendingScrollRestore = () => _pendingScrollRatio = null;
         }
         UpdateRenderControlViewportHeight();
-        if (Markdown != _lastMarkdown)
+        if (Markdown != _lastMarkdown && MarkdownPreviewUpdatesEnabled)
             UpdateDocument();
     }
 
@@ -299,6 +341,8 @@ public partial class MarkdownEngineView : UserControl
 
     private void UpdateDocument()
     {
+        if (!MarkdownPreviewUpdatesEnabled)
+            return;
         var md = Markdown ?? "";
         if (md == _lastMarkdown)
             return;
@@ -350,6 +394,9 @@ public partial class MarkdownEngineView : UserControl
         catch { }
         base.OnDetachedFromVisualTree(e);
     }
+
+    /// <summary>预览渲染区是否存在文本选区（右键「复制」是否可用）。</summary>
+    public bool HasPreviewTextSelection => RenderControl?.HasTextSelection ?? false;
 
     /// <summary>将预览区当前选区复制到剪贴板。供窗口 Ctrl+C 在预览激活时调用。</summary>
     public System.Threading.Tasks.Task<bool> TryCopySelectionAsync() =>

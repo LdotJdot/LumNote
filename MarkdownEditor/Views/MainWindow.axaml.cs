@@ -134,6 +134,7 @@ public partial class MainWindow : Window
             });
 
         ApplyLayout(vm.LayoutMode);
+        SyncLayoutModeButton(vm);
         vm.PropertyChanged += VmOnPropertyChanged;
         vm.ThemeChanged += OnThemeChanged;
         vm.OpenImageInNewWindowRequested += path =>
@@ -168,13 +169,9 @@ public partial class MainWindow : Window
         // 底部状态栏布局切换（下拉菜单）
         if (LayoutModeButton != null)
         {
-            LayoutBothMenuItem.Click += (_, _) =>
-            {
-                vm.LayoutMode = EditorLayoutMode.Both;
-                PreviewEngine?.RenderControl.ResetEngine();
-            };
-            LayoutEditorOnlyMenuItem.Click += (_, _) => vm.LayoutMode = EditorLayoutMode.EditorOnly;
-            LayoutPreviewOnlyMenuItem.Click += (_, _) => vm.LayoutMode = EditorLayoutMode.PreviewOnly;
+            LayoutBothMenuItem.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.Both);
+            LayoutEditorOnlyMenuItem.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.EditorOnly);
+            LayoutPreviewOnlyMenuItem.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.PreviewOnly);
         }
 
         StatusBarPathBorder?.Tapped += (_, _) => OpenCurrentFileFolderInExplorer();
@@ -236,6 +233,7 @@ public partial class MainWindow : Window
         UpdateActivityBarHighlight(vm);
 
         SetupEditorContextMenuAndKeys(vm);
+        SetupPreviewContextMenu();
         SetupFileTreeContextMenu(vm);
         SetupFileTreeRootButtons(vm);
         SetupDocumentTabBackStack(vm);
@@ -1632,16 +1630,7 @@ public partial class MainWindow : Window
         if (e.PropertyName == nameof(MainViewModel.LayoutMode))
         {
             ApplyLayout(vm.LayoutMode);
-            // 同步更新底部布局按钮的文字
-            if (LayoutModeButton != null)
-            {
-                LayoutModeButton.Content = vm.LayoutMode switch
-                {
-                    EditorLayoutMode.EditorOnly => "仅编辑",
-                    EditorLayoutMode.PreviewOnly => "仅预览",
-                    _ => "编辑+预览"
-                };
-            }
+            SyncLayoutModeButton(vm);
         }
         else if (e.PropertyName is nameof(MainViewModel.IsExplorerActive)
                  or nameof(MainViewModel.IsSearchActive)
@@ -1721,6 +1710,10 @@ public partial class MainWindow : Window
             if (DataContext is MainViewModel m)
                 m.ExitCompareWithCommit();
         };
+
+        EditorContextLayoutBoth.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.Both);
+        EditorContextLayoutEditorOnly.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.EditorOnly);
+        EditorContextLayoutPreviewOnly.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.PreviewOnly);
 
         if (EditorTextBox.ContextFlyout is MenuFlyout editorFlyout)
         {
@@ -1810,6 +1803,47 @@ public partial class MainWindow : Window
         KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.OemMinus, KeyModifiers.Control), Command = new RelayCommand(() => { SyncActivePaneFromFocus(vm); vm.ZoomOutCommand.Execute(null); }) });
     }
 
+    private void SetupPreviewContextMenu()
+    {
+        PreviewContextLayoutBoth.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.Both);
+        PreviewContextLayoutEditorOnly.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.EditorOnly);
+        PreviewContextLayoutPreviewOnly.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.PreviewOnly);
+        PreviewContextCopy.Click += async (_, _) =>
+        {
+            if (PreviewEngine != null)
+                await PreviewEngine.TryCopySelectionAsync();
+        };
+
+        if (PreviewPaneGrid?.ContextFlyout is MenuFlyout previewFlyout)
+        {
+            previewFlyout.Opening += (_, _) =>
+            {
+                PreviewContextCopy.IsEnabled = PreviewEngine?.HasPreviewTextSelection ?? false;
+            };
+        }
+    }
+
+    private void SyncLayoutModeButton(MainViewModel vm)
+    {
+        if (LayoutModeButton == null)
+            return;
+        LayoutModeButton.Content = vm.LayoutMode switch
+        {
+            EditorLayoutMode.EditorOnly => "仅编辑",
+            EditorLayoutMode.PreviewOnly => "仅预览",
+            _ => "编辑+预览"
+        };
+    }
+
+    private void ApplyLayoutModeFromMenu(EditorLayoutMode mode)
+    {
+        if (DataContext is not MainViewModel vm)
+            return;
+        vm.LayoutMode = mode;
+        if (mode == EditorLayoutMode.Both)
+            PreviewEngine?.RenderControl.ResetEngine();
+    }
+
     private void OnWindowGotFocus(object? sender, GotFocusEventArgs e)
     {
         if (DataContext is not MainViewModel vm) return;
@@ -1882,6 +1916,23 @@ public partial class MainWindow : Window
             CommitTreeItemRename(renameBox);
             e.Handled = true;
             return;
+        }
+
+        // Ctrl+C：预览区焦点常在 ScrollViewer 上，键盘到不了 EngineRenderControl，在此统一复制选区
+        if (e.Key == Key.C && (e.KeyModifiers & KeyModifiers.Control) != 0 && PreviewEngine != null && PreviewPaneGrid != null)
+        {
+            var focused = FocusManager?.GetFocusedElement() as Visual;
+            bool inPreviewPane =
+                focused != null
+                && (focused == PreviewPaneGrid || focused.GetVisualAncestors().Contains(PreviewPaneGrid));
+            if (inPreviewPane || vm.ActivePane == "Preview")
+            {
+                if (PreviewEngine.TryCopySelectionAsync().ConfigureAwait(false).GetAwaiter().GetResult())
+                {
+                    e.Handled = true;
+                    return;
+                }
+            }
         }
 
         // Ctrl+V 在编辑区时走统一粘贴（文件/图片/文本）

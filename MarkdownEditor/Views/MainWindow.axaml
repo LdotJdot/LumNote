@@ -1248,6 +1248,12 @@
                            Classes="editorControl">
               <Control.ContextFlyout>
                 <MenuFlyout>
+                  <MenuItem Header="布局">
+                    <MenuItem Header="编辑+预览" x:Name="EditorContextLayoutBoth"/>
+                    <MenuItem Header="仅编辑" x:Name="EditorContextLayoutEditorOnly"/>
+                    <MenuItem Header="仅预览" x:Name="EditorContextLayoutPreviewOnly"/>
+                  </MenuItem>
+                  <MenuItem Header="-"/>
                   <MenuItem Header="撤销" x:Name="EditorContextUndo"/>
                   <MenuItem Header="重做" x:Name="EditorContextRedo"/>
                   <MenuItem Header="-"/>
@@ -1320,11 +1326,23 @@
                 RowDefinitions="*"
                 Classes="previewPane"
                 IsVisible="{Binding PreviewPaneLayoutVisible}">
+            <Grid.ContextFlyout>
+              <MenuFlyout>
+                <MenuItem Header="布局">
+                  <MenuItem Header="编辑+预览" x:Name="PreviewContextLayoutBoth"/>
+                  <MenuItem Header="仅编辑" x:Name="PreviewContextLayoutEditorOnly"/>
+                  <MenuItem Header="仅预览" x:Name="PreviewContextLayoutPreviewOnly"/>
+                </MenuItem>
+                <MenuItem Header="-"/>
+                <MenuItem Header="复制" x:Name="PreviewContextCopy"/>
+              </MenuFlyout>
+            </Grid.ContextFlyout>
             <controls:MarkdownEngineView x:Name="PreviewEngine"
                                          Grid.Row="0"
                                          Focusable="True"
                                          IsVisible="{Binding ShowMarkdownPreviewWhenNotDiffing}"
                                          Markdown="{Binding CurrentMarkdown}"
+                                         MarkdownPreviewUpdatesEnabled="{Binding ShouldRenderLiveMarkdownPreview}"
                                          StyleConfig="{Binding Config.Markdown}"
                                          ZoomLevel="{Binding PreviewZoomLevel}"
                                          Background="{Binding Config.Markdown.BackgroundColor, Converter={x:Static conv:HexToBrushConverter.Instance}}"/>

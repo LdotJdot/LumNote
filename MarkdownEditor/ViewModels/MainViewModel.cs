@@ -125,7 +125,7 @@ public sealed partial class MainViewModel : ViewModelBase
 
     public MainViewModel()
     {
-        // 根据配置恢复布局模式（默认 Both）
+        // 根据配置恢复布局模式（默认仅编辑）
         if (!string.IsNullOrEmpty(Config.Ui.LayoutMode))
         {
             try
@@ -135,7 +135,7 @@ public sealed partial class MainViewModel : ViewModelBase
             }
             catch
             {
-                _layoutMode = EditorLayoutMode.Both;
+                _layoutMode = EditorLayoutMode.EditorOnly;
             }
         }
         LoadRecentFoldersFromDisk(_recentFolderPaths);
@@ -186,7 +186,7 @@ public sealed partial class MainViewModel : ViewModelBase
     private int _caretLine = 1;
     private int _caretColumn = 1;
     private bool _isModified;
-    private EditorLayoutMode _layoutMode = EditorLayoutMode.Both;
+    private EditorLayoutMode _layoutMode = EditorLayoutMode.EditorOnly;
     private bool _isExplorerActive = true;
     private bool _isSearchActive;
     private bool _isSettingsActive;
@@ -203,9 +203,9 @@ public sealed partial class MainViewModel : ViewModelBase
     private const int MaxRecentFolders = 10;
     /// <summary>工作区根目录列表；多根时左侧文件树每个根默认折叠。</summary>
     private readonly List<string> _workspaceFolderPaths = [];
-    /// <summary>关闭后的文档内容缓存（路径→内容），最多 10 个，FIFO 淘汰，避免越用越卡。</summary>
+    /// <summary>关闭后的文档内容缓存（路径→内容），FIFO 淘汰，避免越用越卡。</summary>
     private readonly List<(string path, string content)> _closedDocumentCache = [];
-    private const int MaxClosedDocumentCache = 10;
+    private const int MaxClosedDocumentCache = 5;
     private readonly ObservableCollection<RecentFileItem> _recentFileItems = [];
     private readonly ObservableCollection<string> _recentFolderPaths = [];
     private CancellationTokenSource? _searchCts;
@@ -521,6 +521,10 @@ public sealed partial class MainViewModel : ViewModelBase
             if (!string.IsNullOrEmpty(pathToSave))
                 _previewScrollRatiosByPath[pathToSave] = _currentPreviewScrollRatio;
 
+            var leaving = _activeDocument;
+            if (leaving is not null && !ReferenceEquals(leaving, value))
+                leaving.CachedMarkdown = _currentMarkdown;
+
             _activeDocument = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(ShowEditorPaneForCurrentDoc));
@@ -646,6 +650,7 @@ public sealed partial class MainViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowMarkdownPreview));
                 OnPropertyChanged(nameof(ShowMarkdownPreviewWhenNotDiffing));
                 OnPropertyChanged(nameof(ShowPreviewImageWhenNotDiffing));
+                OnPropertyChanged(nameof(ShouldRenderLiveMarkdownPreview));
             }
         }
     }
@@ -1174,6 +1179,7 @@ public sealed partial class MainViewModel : ViewModelBase
                 OnPropertyChanged(nameof(EditorPaneLayoutVisible));
                 OnPropertyChanged(nameof(PreviewPaneLayoutVisible));
                 OnPropertyChanged(nameof(ShowEditorPreviewSplitter));
+                OnPropertyChanged(nameof(ShouldRenderLiveMarkdownPreview));
             }
         }
     }
@@ -1221,6 +1227,12 @@ public sealed partial class MainViewModel : ViewModelBase
 
     /// <summary>仅「编辑+预览」且非 Git 比对时显示中间分隔条并可拖动。</summary>
     public bool ShowEditorPreviewSplitter => _layoutMode == EditorLayoutMode.Both && !IsDiffCompareActive;
+
+    /// <summary>
+    /// 是否应对 Markdown 预览做实时解析与渲染（仅编辑/图片/Git 比对时关闭，避免无效 CPU）。
+    /// </summary>
+    public bool ShouldRenderLiveMarkdownPreview =>
+        PreviewPaneLayoutVisible && ShowMarkdownPreview;
 
     public bool IsExplorerActive
     {
@@ -1763,7 +1775,7 @@ public sealed partial class MainViewModel : ViewModelBase
         }
         else if (doc.CachedMarkdown != null)
         {
-            // 关闭后快照缓存最多保留 10 个，FIFO 淘汰
+            // 关闭后快照缓存 FIFO 淘汰（见 MaxClosedDocumentCache）
             var path = doc.FullPath;
             if (!string.IsNullOrEmpty(path))
             {
@@ -1900,6 +1912,7 @@ public sealed partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(EditorPaneLayoutVisible));
         OnPropertyChanged(nameof(PreviewPaneLayoutVisible));
         OnPropertyChanged(nameof(ShowEditorPreviewSplitter));
+        OnPropertyChanged(nameof(ShouldRenderLiveMarkdownPreview));
         NotifyWelcomeViewChanged();
     }
 
@@ -1919,6 +1932,7 @@ public sealed partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(EditorPaneLayoutVisible));
         OnPropertyChanged(nameof(PreviewPaneLayoutVisible));
         OnPropertyChanged(nameof(ShowEditorPreviewSplitter));
+        OnPropertyChanged(nameof(ShouldRenderLiveMarkdownPreview));
         NotifyWelcomeViewChanged();
     }
 
@@ -2267,7 +2281,7 @@ public sealed partial class MainViewModel : ViewModelBase
             _documents.Add(doc);
         }
 
-        // 优先从关闭文档缓存恢复（最多 10 个），否则从磁盘读取
+        // 优先从关闭文档缓存恢复，否则从磁盘读取
         var cacheIdx = _closedDocumentCache.FindIndex(t => string.Equals(t.path, fullPath, StringComparison.OrdinalIgnoreCase));
         if (cacheIdx >= 0)
         {

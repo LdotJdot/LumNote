@@ -136,6 +136,9 @@ internal sealed class EditorController
             // 文本为空或尚未加载文档时不必触发高亮
             if (_editor.Document == null)
                 return;
+            // 仅预览模式下编辑区折叠，不必为不可见区域跑高亮定时器
+            if (!_viewModel.ShowEditor)
+                return;
 
             // 滚动触发的高亮只用于调整窗口位置，不强制重算当前窗口的 token。
             _highlightTimer.Stop();
@@ -157,8 +160,26 @@ internal sealed class EditorController
 
         _viewModel.PropertyChanged += (_, e) =>
         {
+            if (e.PropertyName == nameof(MainViewModel.ShowEditor))
+            {
+                if (_viewModel.ShowEditor)
+                {
+                    // 从「仅预览」等状态回到带编辑区时，补一次 VM→编辑区全文同步
+                    ApplyViewModelTextToEditor();
+                    _forceRehighlightWindow = true;
+                    _highlightedWindowStart = _highlightedWindowEnd = -1;
+                    UpdateEditorHighlight();
+                }
+                else
+                    _highlightTimer.Stop();
+                return;
+            }
             if (e.PropertyName == nameof(MainViewModel.CurrentMarkdown))
             {
+                // 仅预览：正文由右侧预览消费，不向隐藏编辑区灌全文，避免切换文件时大文档布局与预渲染
+                if (!_viewModel.ShowEditor)
+                    return;
+
                 var target = _viewModel.CurrentMarkdown ?? string.Empty;
                 var hasVirtual = MarkdownEditor.Services.DiffVirtualLineHelper.ContainsVirtualLines(target);
                 if (_currentMarkdownChangeFromEditor)
@@ -170,27 +191,7 @@ internal sealed class EditorController
 
                 var willSet = !string.Equals(_editor.Text, target, StringComparison.Ordinal);
                 if (willSet)
-                {
-                    var caret = _editor.TextArea.Caret.Offset;
-                    _editor.Text = target;
-                    _editor.TextArea.Caret.Offset = Math.Min(caret, _editor.Text.Length);
-                    _currentEditorPath = _viewModel.CurrentFilePath ?? "";
-
-                    // 文本/文档切换后重置光标历史起点，避免旧文档位置影响后续“大跳转”判断。
-                    _lastCaretOffsetForHistory = _editor.TextArea.Caret.Offset;
-                    _lastHistoryPushedOffset = -1;
-
-                    if (_pendingGoToLine > 0 && _editor.Document != null && _editor.Document.LineCount >= _pendingGoToLine)
-                    {
-                        // 仅当文档已加载足够行时再跳转，避免异步读盘时内容未到导致跳转失效。
-                        _suppressNextHistoryRecord = true;
-                        var lineNum = Math.Clamp(_pendingGoToLine, 1, _editor.Document.LineCount);
-                        var line = _editor.Document.GetLineByNumber(lineNum);
-                        _editor.TextArea.Caret.Offset = line.Offset;
-                        _editor.TextArea.Caret.BringCaretToView();
-                        _pendingGoToLine = -1;
-                    }
-                }
+                    ApplyViewModelTextToEditor();
             }
         };
 
@@ -202,6 +203,9 @@ internal sealed class EditorController
                 _currentMarkdownChangeFromEditor = true;
                 _viewModel.CurrentMarkdown = text;
             }
+
+            if (!_viewModel.ShowEditor)
+                return;
 
             // 文本已变化，下一次高亮需要强制重算当前窗口（避免使用旧 token）。
             _forceRehighlightWindow = true;
@@ -338,8 +342,35 @@ internal sealed class EditorController
         _suppressNextHistoryRecord = true;
     }
 
+    /// <summary>将 ViewModel 当前正文与路径同步到编辑区（隐藏列不调用，见 CurrentMarkdown 处理）。</summary>
+    private void ApplyViewModelTextToEditor()
+    {
+        var target = _viewModel.CurrentMarkdown ?? string.Empty;
+        if (string.Equals(_editor.Text, target, StringComparison.Ordinal))
+            return;
+        var caret = _editor.TextArea.Caret.Offset;
+        _editor.Text = target;
+        _editor.TextArea.Caret.Offset = Math.Min(caret, _editor.Text.Length);
+        _currentEditorPath = _viewModel.CurrentFilePath ?? "";
+
+        _lastCaretOffsetForHistory = _editor.TextArea.Caret.Offset;
+        _lastHistoryPushedOffset = -1;
+
+        if (_pendingGoToLine > 0 && _editor.Document != null && _editor.Document.LineCount >= _pendingGoToLine)
+        {
+            _suppressNextHistoryRecord = true;
+            var lineNum = Math.Clamp(_pendingGoToLine, 1, _editor.Document.LineCount);
+            var line = _editor.Document.GetLineByNumber(lineNum);
+            _editor.TextArea.Caret.Offset = line.Offset;
+            _editor.TextArea.Caret.BringCaretToView();
+            _pendingGoToLine = -1;
+        }
+    }
+
     private void UpdateEditorHighlight()
     {
+        if (!_viewModel.ShowEditor)
+            return;
         var text = _editor.Text ?? string.Empty;
         var version = ++_highlightVersion;
 

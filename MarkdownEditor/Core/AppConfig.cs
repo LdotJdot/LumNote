@@ -491,7 +491,7 @@ public sealed class UiConfig
     /// <summary>左侧文件栏是否已折叠为侧边窄条，点击可再展开。</summary>
     public bool SidebarCollapsed { get; set; } = false;
     public double EditorWidth { get; set; } = 1;
-    public string LayoutMode { get; set; } = "Both";
+    public string LayoutMode { get; set; } = "EditorOnly";
     /// <summary>自动保存间隔（秒）：0=禁用，60/300/600/1200 等。</summary>
     public int AutoSaveIntervalSeconds { get; set; } = 0;
     /// <summary>界面主题：Dark（深色）/ Light（浅色）。</summary>
