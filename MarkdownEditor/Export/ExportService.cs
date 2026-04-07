@@ -32,10 +32,14 @@ public sealed class ExportService
     /// <summary>
     /// 弹出保存对话框并执行导出。取消或未选路径返回 null；成功返回 true；失败返回 false 且 errorMessage 有值。
     /// </summary>
+    /// <param name="renderAreaWidthPx">当前渲染区内容宽度（像素），用于 PDF/长图等导出的页宽；为 null 时使用各导出器默认值。</param>
+    /// <param name="progress">导出进度；在保存对话框关闭后、实际写入文件前开始报告。</param>
     public async Task<(bool? Success, string? ErrorMessage)> ExportWithDialogAsync(
         MainViewModel vm,
         string formatId,
         IStorageProvider storageProvider,
+        int? renderAreaWidthPx = null,
+        IProgress<ExportProgress>? progress = null,
         CancellationToken ct = default)
     {
         var exporter = GetExporter(formatId);
@@ -74,13 +78,24 @@ public sealed class ExportService
             return (false, "无法获取保存路径。");
         }
 
-        var exportOptions = new ExportOptions(StyleConfig: vm.Config.Markdown);
-        var result = await exporter.ExportAsync(
-            vm.CurrentMarkdown ?? "",
-            vm.DocumentBasePath ?? "",
-            outputPath,
-            exportOptions,
-            ct);
+        progress?.Report(new ExportProgress("正在导出…", null));
+
+        var exportOptions = new ExportOptions(
+            PageWidthPx: renderAreaWidthPx,
+            StyleConfig: vm.Config.Markdown,
+            Progress: progress);
+
+        var result = await Task.Run(
+                () => exporter.ExportAsync(
+                    vm.CurrentMarkdown ?? "",
+                    vm.DocumentBasePath ?? "",
+                    outputPath,
+                    exportOptions,
+                    ct),
+                ct)
+            .ConfigureAwait(false);
+
+        progress?.Report(new ExportProgress("完成", 100));
 
         if (result.Success)
             return (true, null);

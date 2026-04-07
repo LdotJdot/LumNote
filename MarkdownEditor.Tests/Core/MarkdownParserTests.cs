@@ -92,6 +92,69 @@ public class MarkdownParserTests
     }
 
     [Fact]
+    public void Table_header_allows_line_break_inside_cell()
+    {
+        var md =
+            "| 项目\n名称 | 中文 | 石化废水毒害污染物靶向去除臭氧催化剂研发及应用 | 石化废水毒害污染物靶向去除臭氧催化剂研发及应用 | 石化废水毒害污染物靶向去除臭氧催化剂研发及应用 |\n| --- | --- | --- | --- | --- |";
+        var doc = MarkdownParser.Parse(md);
+        var t = Assert.IsType<TableNode>(doc.Children[0]);
+        Assert.Equal(5, t.Headers.Count);
+        Assert.Equal("项目\n名称", t.Headers[0]);
+        Assert.Equal("中文", t.Headers[1]);
+    }
+
+    [Fact]
+    public void Table_body_allows_line_break_inside_cell()
+    {
+        var md =
+            "| h1 | h2 |\n| --- | --- |\n| a\nb | c |";
+        var doc = MarkdownParser.Parse(md);
+        var t = Assert.IsType<TableNode>(doc.Children[0]);
+        Assert.Single(t.Rows);
+        Assert.Equal("a\nb", t.Rows[0][0]);
+        Assert.Equal("c", t.Rows[0][1]);
+    }
+
+    [Fact]
+    public void Table_body_continuation_may_omit_pipe_until_later_line()
+    {
+        var md =
+            "| h1 | h2 |\n| --- | --- |\n| x\ny\n| z |";
+        var doc = MarkdownParser.Parse(md);
+        var t = Assert.IsType<TableNode>(doc.Children[0]);
+        Assert.Single(t.Rows);
+        Assert.Equal("x\ny", t.Rows[0][0]);
+        Assert.Equal("z", t.Rows[0][1]);
+    }
+
+    [Fact]
+    public void Table_body_overshooting_merge_starts_new_row()
+    {
+        var md =
+            "| h1 | h2 |\n| --- | --- |\n| partial\n| a | b |";
+        var doc = MarkdownParser.Parse(md);
+        var t = Assert.IsType<TableNode>(doc.Children[0]);
+        Assert.Equal(2, t.Rows.Count);
+        Assert.Equal("partial", t.Rows[0][0]);
+        Assert.Equal("a", t.Rows[1][0]);
+        Assert.Equal("b", t.Rows[1][1]);
+    }
+
+    [Fact]
+    public void Table_body_second_continuation_breaks_row()
+    {
+        // 单元格内仅合并「一次」换行；第三行物理续行视为新逻辑行
+        var md =
+            "| h1 | h2 |\n| --- | --- |\n| a\nb\nc | d |";
+        var doc = MarkdownParser.Parse(md);
+        var t = Assert.IsType<TableNode>(doc.Children[0]);
+        Assert.Equal(2, t.Rows.Count);
+        Assert.Equal("a\nb", t.Rows[0][0]);
+        Assert.Equal("c", t.Rows[1][0]);
+        Assert.Equal("d", t.Rows[1][1]);
+    }
+
+    [Fact]
     public void Footnote_definition_multiline_continuation()
     {
         var md =
@@ -158,5 +221,19 @@ public class MarkdownParserTests
         var bold = Assert.IsType<BoldNode>(p.Content[0]);
         var italic = Assert.IsType<ItalicNode>(bold.Content[0]);
         Assert.Equal("emph", CollectPlainText(italic.Content));
+    }
+
+    [Fact]
+    public void MathBlock_first_line_has_content_after_opening_delimiter()
+    {
+        var md =
+            @"$$\begin{eqnarray}
+a &= b
+\end{eqnarray}$$";
+        var doc = MarkdownParser.Parse(md);
+        var mb = Assert.Single(doc.Children);
+        var math = Assert.IsType<MathBlockNode>(mb);
+        Assert.Contains("\\begin{eqnarray}", math.LaTeX, StringComparison.Ordinal);
+        Assert.DoesNotContain("$$", math.LaTeX, StringComparison.Ordinal);
     }
 }

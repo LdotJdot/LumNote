@@ -21,8 +21,11 @@ public sealed class HtmlExporter : IMarkdownExporter
     {
         try
         {
+            options.ReportProgress("正在解析 Markdown…", 10);
             var doc = MarkdownParser.Parse(markdown);
+            options.ReportProgress("正在生成 HTML…", 50);
             var html = BuildHtml(doc, documentBasePath, options?.StyleConfig);
+            options.ReportProgress("正在写入文件…", 90);
             File.WriteAllText(outputPath, html, Encoding.UTF8);
             return Task.FromResult(new ExportResult(true));
         }

@@ -27,6 +27,7 @@ using MarkdownEditor.Services;
 using MarkdownEditor.Models;
 using DiffPlex.DiffBuilder.Model;
 using System.Text;
+using MarkdownEditor.Engine;
 using MarkdownEditor.Export;
 using MarkdownEditor.Helpers;
 using System.Diagnostics;
@@ -79,6 +80,7 @@ public partial class MainWindow : Window
         new HtmlExporter(),
         new PdfExporter(),
         new LongImageExporter(),
+        new DocxExporter(),
     ]);
 
     private readonly EditorController _editorController;
@@ -210,6 +212,7 @@ public partial class MainWindow : Window
         ExportHtmlMenuItem.Click += async (_, _) => await DoExportAsync(vm, "html");
         ExportPdfMenuItem.Click += async (_, _) => await DoExportAsync(vm, "pdf");
         ExportPngMenuItem.Click += async (_, _) => await DoExportAsync(vm, "png");
+        ExportDocxMenuItem.Click += async (_, _) => await DoExportAsync(vm, "docx");
 
         Closing += (_, e) =>
         {
@@ -2547,28 +2550,106 @@ public partial class MainWindow : Window
             await msg.ShowDialog(this);
             return;
         }
-        var (success, errorMessage) = await _exportService.ExportWithDialogAsync(vm, formatId, StorageProvider);
-        if (success == false && !string.IsNullOrEmpty(errorMessage))
+        int? renderWidth = null;
+        if (PreviewEngine?.RenderControl is { Bounds.Width: > 0 } rc)
         {
-            var msg = new Window
+            var cfg = EngineConfig.FromStyle(vm.Config.Markdown) ?? new EngineConfig();
+            renderWidth = (int)Math.Max(1, rc.Bounds.Width - cfg.ContentPaddingX * 2);
+        }
+
+        Window? exportProgressWindow = null;
+        TextBlock? exportProgressText = null;
+        ProgressBar? exportProgressBar = null;
+        var exportProgress = new Progress<ExportProgress>(p =>
+        {
+            Dispatcher.UIThread.Post(() =>
             {
-                Title = "导出失败",
-                Width = 380,
-                MaxWidth = 440,
-                SizeToContent = SizeToContent.Height,
-                CanResize = false,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Icon = GetAppIcon()
-            };
-            var okButton = new Button { Content = "确定", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right };
-            okButton.Click += (_, _) => msg.Close();
-            msg.Content = new StackPanel
+                if (exportProgressWindow == null)
+                {
+                    exportProgressText = new TextBlock
+                    {
+                        Text = p.Message,
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxWidth = 360
+                    };
+                    exportProgressBar = new ProgressBar
+                    {
+                        Minimum = 0,
+                        Maximum = 100,
+                        Height = 22,
+                        Margin = new Thickness(0, 4, 0, 0),
+                        IsIndeterminate = !p.Percent.HasValue
+                    };
+                    if (p.Percent.HasValue)
+                        exportProgressBar.Value = p.Percent.Value;
+
+                    exportProgressWindow = new Window
+                    {
+                        Title = "导出",
+                        Width = 400,
+                        MinHeight = 120,
+                        SizeToContent = SizeToContent.Height,
+                        CanResize = false,
+                        WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                        Icon = GetAppIcon(),
+                        Content = new StackPanel
+                        {
+                            Margin = new Thickness(16),
+                            Spacing = 8,
+                            Children = { exportProgressText, exportProgressBar }
+                        }
+                    };
+                    exportProgressWindow.Show(this);
+                }
+                else
+                {
+                    if (exportProgressText != null)
+                        exportProgressText.Text = p.Message;
+                    if (exportProgressBar != null)
+                    {
+                        if (p.Percent.HasValue)
+                        {
+                            exportProgressBar.IsIndeterminate = false;
+                            exportProgressBar.Value = p.Percent.Value;
+                        }
+                    }
+                }
+            });
+        });
+
+        try
+        {
+            var (success, errorMessage) = await _exportService.ExportWithDialogAsync(vm, formatId, StorageProvider, renderWidth, exportProgress);
+            if (success == false && !string.IsNullOrEmpty(errorMessage))
             {
-                Margin = new Thickness(16),
-                Spacing = 12,
-                Children = { new TextBlock { Text = errorMessage, TextWrapping = TextWrapping.Wrap, MaxWidth = 348 }, okButton }
-            };
-            await msg.ShowDialog(this);
+                var msg = new Window
+                {
+                    Title = "导出失败",
+                    Width = 380,
+                    MaxWidth = 440,
+                    SizeToContent = SizeToContent.Height,
+                    CanResize = false,
+                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                    Icon = GetAppIcon()
+                };
+                var okButton = new Button { Content = "确定", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right };
+                okButton.Click += (_, _) => msg.Close();
+                msg.Content = new StackPanel
+                {
+                    Margin = new Thickness(16),
+                    Spacing = 12,
+                    Children = { new TextBlock { Text = errorMessage, TextWrapping = TextWrapping.Wrap, MaxWidth = 348 }, okButton }
+                };
+                await msg.ShowDialog(this);
+            }
+        }
+        finally
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                exportProgressWindow?.Close();
+                exportProgressWindow = null;
+            });
         }
     }
 

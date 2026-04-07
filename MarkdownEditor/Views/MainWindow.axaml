@@ -322,6 +322,7 @@
               <MenuItem Header="导出为 HTML..." x:Name="ExportHtmlMenuItem"/>
               <MenuItem Header="导出为 PDF..." x:Name="ExportPdfMenuItem"/>
               <MenuItem Header="导出为长图 (PNG)..." x:Name="ExportPngMenuItem"/>
+              <MenuItem Header="导出为 Word (DOCX)..." x:Name="ExportDocxMenuItem"/>
             </MenuItem>
             <MenuItem Header="-"/>
             <MenuItem Header="关闭当前文档" x:Name="CloseEditorMenuItem"/>

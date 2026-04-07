@@ -29,15 +29,15 @@ public sealed class LongImageExporter : IMarkdownExporter
             var width = options?.PageWidthPx ?? (int)DefaultWidth;
             if (width < 100) width = (int)DefaultWidth;
 
+            options.ReportProgress("正在准备长图渲染…", 5);
             var config = EngineConfig.FromStyle(options?.StyleConfig) ?? new EngineConfig();
             var imageLoader = new BasePathImageLoader(
                 documentBasePath ?? "",
                 Math.Clamp(config.ImagePreviewCacheMaxEntries, 4, 256));
-            var exportBudget = (int)
-                Math.Clamp(Math.Ceiling(width * 2f), 256, Math.Max(256, config.ImagePreviewMaxLongEdgeCap));
-            imageLoader.ConfigurePreviewDecode(exportBudget, false);
+            ExportImageDecode.ConfigureForLongImage(imageLoader, config, width, options);
             var doc = new StringDocumentSource(markdown ?? "");
             var engine = new RenderEngine(width, config, imageLoader);
+            options.ReportProgress("正在布局文档…", 20);
             engine.EnsureFullLayout(doc);
             float totalHeight = engine.MeasureTotalHeight(doc);
             if (totalHeight <= 0) totalHeight = 100;
@@ -46,6 +46,7 @@ public sealed class LongImageExporter : IMarkdownExporter
             int h = (int)Math.Ceiling((double)totalHeight);
             if (h <= 0) h = 100;
 
+            options.ReportProgress("正在渲染长图…", 45);
             using var surface = SKSurface.Create(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Premul));
             if (surface == null)
                 return Task.FromResult(new ExportResult(false, "无法创建绘图表面。"));
@@ -67,11 +68,13 @@ public sealed class LongImageExporter : IMarkdownExporter
             };
             engine.Render(ctx, doc, scrollY: 0, viewportHeight: totalHeight + 500, null);
 
+            options.ReportProgress("正在编码 PNG…", 75);
             using var image = surface.Snapshot();
             using var data = image.Encode(SKEncodedImageFormat.Png, 100);
             if (data == null)
                 return Task.FromResult(new ExportResult(false, "PNG 编码失败。"));
 
+            options.ReportProgress("正在写入文件…", 90);
             using var stream = File.OpenWrite(outputPath);
             data.SaveTo(stream);
             return Task.FromResult(new ExportResult(true));

@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Text;
+using MarkdownEditor.Core;
 
 namespace MarkdownEditor.Engine.Document;
 
@@ -75,17 +77,31 @@ public static class BlockScanner
         if (IsHorizontalRule(trimmed))
             return new BlockSpan(startLine, startLine + 1, BlockKind.HorizontalRule);
 
-        // 表格
-        if (
-            trimmed.Contains('|')
-            && startLine + 1 < doc.LineCount
-            && IsTableSeparator(doc.GetLine(startLine + 1))
-        )
+        // 表格：多行表头 + 表体单元格内换行（与 MarkdownParser.ParseTable 一致）
+        if (trimmed.Contains('|'))
         {
-            int end = startLine + 2;
-            while (end < doc.LineCount && doc.GetLine(end).Trim().Contains('|'))
-                end++;
-            return new BlockSpan(startLine, end, BlockKind.Table);
+            int sepIdx = FindTableSeparatorLineIndex(doc, startLine);
+            if (sepIdx >= 0)
+            {
+                var headerSb = new StringBuilder();
+                for (int h = startLine; h < sepIdx; h++)
+                {
+                    if (headerSb.Length > 0)
+                        headerSb.Append('\n');
+                    headerSb.Append(doc.GetLine(h));
+                }
+                var headerCells = MarkdownParser.ParseTableCells(headerSb.ToString());
+                if (headerCells.Count > 0)
+                {
+                    int bodyEnd = MarkdownParser.ConsumeTableBodyEndExclusive(
+                        i => doc.GetLine(i).ToString(),
+                        doc.LineCount,
+                        sepIdx + 1,
+                        headerCells.Count
+                    );
+                    return new BlockSpan(startLine, bodyEnd, BlockKind.Table);
+                }
+            }
         }
 
         // 标题
@@ -101,9 +117,9 @@ public static class BlockScanner
             return new BlockSpan(startLine, end, BlockKind.CodeBlock);
         }
 
-        // 数学块（与 MarkdownParser 一致）：
+        // 数学块（与 MarkdownParser.IsMathBlockStart / ParseMathBlock 一致）：
         // - 单行：$$...$$（同一行内再次出现 $$）
-        // - 多行：行首为 $$ 且 $$ 后只有空白，结束行再出现 $$。
+        // - 多行：本行无闭合 $$（含独占 $$，或 $$ 后首行即带 \\begin{eqnarray} 等），结束行再出现 $$。
         if (trimmed.StartsWith("$$"))
         {
             ReadOnlySpan<char> rest =
@@ -115,17 +131,8 @@ public static class BlockScanner
                 return new BlockSpan(startLine, startLine + 1, BlockKind.MathBlock);
             }
 
-            // 多行 $$ 起始：$$ 后只能是空白
-            bool onlyWhitespace = true;
-            foreach (var c in rest)
-            {
-                if (!char.IsWhiteSpace(c))
-                {
-                    onlyWhitespace = false;
-                    break;
-                }
-            }
-            if (trimmed.Length == 2 || onlyWhitespace)
+            // 多行：本行无闭合 $$
+            if (trimmed.Length == 2 || rest.IndexOf("$$".AsSpan()) < 0)
             {
                 int end = startLine + 1;
                 while (
@@ -230,6 +237,27 @@ public static class BlockScanner
                 return false;
         }
         return hasDash;
+    }
+
+    /// <summary>
+    /// 从 startLine 起扫描：每行须非空且含 |，直至遇到分隔行；返回分隔行行号，否则 -1。
+    /// </summary>
+    private static int FindTableSeparatorLineIndex(IDocumentSource doc, int startLine)
+    {
+        int j = startLine;
+        while (j < doc.LineCount)
+        {
+            var line = doc.GetLine(j);
+            var t = line.Trim();
+            if (t.Length == 0)
+                return -1;
+            if (IsTableSeparator(t))
+                return j > startLine ? j : -1;
+            if (!t.Contains('|'))
+                return -1;
+            j++;
+        }
+        return -1;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -411,7 +411,8 @@ public sealed class SkiaRenderer : ITextMeasurer
         int end = Math.Min(startIndex + count, n);
 
         bool usePictureCache = _enableBlockPictureCache
-            && (selection == null || selection.Value.IsEmpty);
+            && (selection == null || selection.Value.IsEmpty)
+            && !ctx.PreferDirectDraw;
 
         for (int idx = startIndex; idx < end; idx++)
         {
@@ -788,6 +789,33 @@ public sealed class SkiaRenderer : ITextMeasurer
         var mathTf = GetMathTypeface();
         var mathFontSize = Math.Max(16, _baseFontSize * 1.15f);
         MathSkiaRenderer.DrawFormula(canvas, run.Bounds, run.Text, bodyTf, mathTf, mathFontSize, _textPaint.Color);
+    }
+
+    /// <summary>
+    /// 与布局/绘制一致：测量公式盒模型（宽、基线上方高度、基线下方深度）。
+    /// 供导出等按真实排版尺寸裁图。
+    /// </summary>
+    public (float width, float height, float depth) MeasureMathFormula(string latex)
+    {
+        if (string.IsNullOrWhiteSpace(latex))
+            return (0, 0, 0);
+        var bodyTf = _bodyTypeface ??= ResolveBodyTypeface();
+        var mathTf = GetMathTypeface();
+        float fontSize = Math.Max(16, _baseFontSize * 1.15f);
+        return MathSkiaRenderer.MeasureFormula(latex, bodyTf, mathTf, fontSize);
+    }
+
+    /// <summary>
+    /// 在给定矩形内绘制公式（与 <see cref="DrawMathRun"/> 使用相同字体与颜色）。
+    /// </summary>
+    public void DrawMathFormula(SKCanvas canvas, SKRect bounds, string latex)
+    {
+        if (string.IsNullOrWhiteSpace(latex) || canvas == null)
+            return;
+        var bodyTf = _bodyTypeface ??= ResolveBodyTypeface();
+        var mathTf = GetMathTypeface();
+        float fontSize = Math.Max(16, _baseFontSize * 1.15f);
+        MathSkiaRenderer.DrawFormula(canvas, bounds, latex, bodyTf, mathTf, fontSize, _textPaint.Color);
     }
 
     /// <inheritdoc />

@@ -110,8 +110,8 @@ public static class MarkdownParser
                 continue;
             }
 
-            // 表格：当前行含|，下一行是分隔行
-            if (i + 1 < lines.Count && trimmed.Contains('|') && IsTableSeparator(lines[i + 1]))
+            // 表格：当前行含 |，且后续若干「续行」（每行含 |）之后出现分隔行（允许表头单元格内软换行）
+            if (trimmed.Contains('|'))
             {
                 var (block, consumed) = ParseTable(lines, i);
                 if (block != null)
@@ -982,30 +982,37 @@ public static class MarkdownParser
 
     private static (TableNode?, int) ParseTable(List<string> lines, int start)
     {
-        var headerLine = lines[start];
+        var headerSb = new StringBuilder();
+        int j = start;
+        while (j < lines.Count)
+        {
+            var line = lines[j];
+            var t = line.Trim();
+            if (t.Length == 0)
+                return (null, 0);
+            if (IsTableSeparator(line))
+                break;
+            if (!t.Contains('|'))
+                return (null, 0);
+            if (headerSb.Length > 0)
+                headerSb.Append('\n');
+            headerSb.Append(line);
+            j++;
+        }
+
+        if (j >= lines.Count || headerSb.Length == 0)
+            return (null, 0);
+
+        var headerLine = headerSb.ToString();
         var headers = ParseTableRow(headerLine);
         if (headers.Count == 0)
             return (null, 0);
 
-        var sepLine = lines[start + 1];
+        var sepLine = lines[j];
         var alignments = ParseTableAlignment(sepLine, headers.Count);
 
         var rows = new List<List<string>>();
-        int i = start + 2;
-
-        while (i < lines.Count)
-        {
-            var line = lines[i];
-            var t = line.Trim();
-            if (t.Length == 0)
-                break;
-            if (!t.Contains('|'))
-                break;
-            var row = ParseTableRow(line);
-            if (row.Count > 0 || t.Replace("|", "").Trim().Length > 0)
-                rows.Add(row);
-            i++;
-        }
+        int i = ConsumeTableBodyCore(idx => lines[idx], lines.Count, j + 1, headers.Count, rows);
 
         return (
             new TableNode
@@ -1017,6 +1024,80 @@ public static class MarkdownParser
             i - start
         );
     }
+
+    /// <summary>单元格内是否已出现至少两个换行（视为用户主动打断，仅接受一次跨行续写）。</summary>
+    private static bool AnyCellHasMultipleNewlines(IReadOnlyList<string> cells)
+    {
+        foreach (var c in cells)
+        {
+            var i = c.IndexOf('\n');
+            if (i >= 0 && c.IndexOf('\n', i + 1) >= 0)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 解析表体：在列数与表头一致的前提下，将物理行合并为逻辑行（单元格内软换行）。
+    /// 新行必须以含 <c>|</c> 的行开始；续行可无 <c>|</c>。若合并下一行会导致列数超过期望值，则当前行提前结束，下一行作为新行。
+    /// 每个单元格最多接受<strong>一个</strong>由续行产生的换行；再续行则视为新逻辑行。
+    /// </summary>
+    private static int ConsumeTableBodyCore(
+        Func<int, string> getLine,
+        int lineCount,
+        int bodyStart,
+        int expectedCols,
+        List<List<string>>? rows
+    )
+    {
+        int i = bodyStart;
+        while (i < lineCount)
+        {
+            var line = getLine(i);
+            var t = line.Trim();
+            if (t.Length == 0)
+                break;
+            if (!t.Contains('|'))
+                break;
+
+            var sb = new StringBuilder(line);
+            i++;
+            var row = ParseTableRow(sb.ToString());
+
+            while (row.Count < expectedCols && i < lineCount)
+            {
+                var next = getLine(i);
+                if (next.Trim().Length == 0)
+                    break;
+                var candidate = sb.ToString() + "\n" + next;
+                var candRow = ParseTableRow(candidate);
+                if (candRow.Count > expectedCols)
+                    break;
+                if (AnyCellHasMultipleNewlines(candRow))
+                    break;
+                sb.Clear();
+                sb.Append(candidate);
+                row = candRow;
+                i++;
+            }
+
+            if (rows != null && (row.Count > 0 || line.Trim().Replace("|", "").Trim().Length > 0))
+                rows.Add(row);
+        }
+
+        return i;
+    }
+
+    /// <summary>供块扫描等与 <see cref="ParseTable"/> 对齐的表体结束行号（不包含）。</summary>
+    internal static int ConsumeTableBodyEndExclusive(
+        Func<int, string> getLine,
+        int lineCount,
+        int bodyStart,
+        int expectedCols
+    ) => ConsumeTableBodyCore(getLine, lineCount, bodyStart, expectedCols, null);
+
+    /// <summary>将单行管道文本拆成单元格（与表格解析一致）。</summary>
+    internal static List<string> ParseTableCells(string line) => ParseTableRow(line);
 
     private static List<string> ParseTableRow(string line)
     {
@@ -1075,8 +1156,9 @@ public static class MarkdownParser
     /// 判断是否为块级数学公式起始行（仅支持 $$ 开头的标准形式）。
     /// 规则：
     /// - 行首必须是 \"$$\"；
-    /// - 若同一行内没有再次出现 \"$$\"，则 \"$$\" 后面只能是空白，否则视为普通文本；
-    /// - 若同一行内再次出现 \"$$\"（形如 \"$$...$$\"），则允许行内有 LaTeX 内容。
+    /// - 若同一行内再次出现 \"$$\"（形如 \"$$...$$\"），则为单行块公式；
+    /// - 若同一行内没有再次出现 \"$$\"，则为多行块公式的起始行（含 \"$$\" 独占一行、或 \"$$\\begin{eqnarray}\" 等首行即带内容），
+    ///   与 <see cref=\"ParseMathBlock\" /> 一致；否则 \"$$\\sum a\" 这类会被误判为普通段落，导出时多出 $ 且多行环境无法成图。
     /// </summary>
     private static bool IsMathBlockStart(ReadOnlySpan<char> trimmed)
     {
@@ -1090,12 +1172,7 @@ public static class MarkdownParser
         if (idx >= 0)
             return true; // 单行 $$...$$ 公式
 
-        // 无结束 $$，仅当 $$ 后只有空白时才视为块级公式起始
-        for (int i = 0; i < rest.Length; i++)
-        {
-            if (!char.IsWhiteSpace(rest[i]))
-                return false;
-        }
+        // 多行：本行无闭合 $$，整行视为块公式起始（ParseMathBlock 会吞掉首行 $$ 之后的内容）
         return true;
     }
 
