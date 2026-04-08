@@ -306,7 +306,7 @@
         </StackPanel>
 
         <Menu Grid.Column="1" VerticalAlignment="Stretch">
-          <MenuItem Header="文件(_F)">
+            <MenuItem Header="文件(_F)">
             <MenuItem Header="新建" x:Name="NewFileMenuItem"/>
             <MenuItem Header="打开文件夹..." x:Name="OpenFolderMenuItem"/>
             <MenuItem Header="添加文件夹..." x:Name="AddFoldersMenuItem"/>
@@ -1334,6 +1334,10 @@
                   <MenuItem Header="仅编辑" x:Name="PreviewContextLayoutEditorOnly"/>
                   <MenuItem Header="仅预览" x:Name="PreviewContextLayoutPreviewOnly"/>
                 </MenuItem>
+                <MenuItem Header="-"/>
+                <MenuItem Header="全屏演示（新窗口）" x:Name="PreviewContextFullscreen"
+                          IsEnabled="{Binding PreviewPaneLayoutVisible}"
+                          ToolTip.Tip="在新窗口全屏显示预览；Esc 或右键退出"/>
                 <MenuItem Header="-"/>
                 <MenuItem Header="复制" x:Name="PreviewContextCopy"/>
               </MenuFlyout>

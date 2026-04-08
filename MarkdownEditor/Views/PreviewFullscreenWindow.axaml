@@ -1,0 +1,41 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:MarkdownEditor.Controls"
+        xmlns:vm="clr-namespace:MarkdownEditor.ViewModels"
+        xmlns:conv="clr-namespace:MarkdownEditor.Converters"
+        x:Class="MarkdownEditor.Views.PreviewFullscreenWindow"
+        x:DataType="vm:MainViewModel"
+        x:CompileBindings="True"
+        Title="预览演示"
+        Width="400"
+        Height="300"
+        WindowStartupLocation="Manual"
+        SystemDecorations="None"
+        Background="{Binding Config.Markdown.BackgroundColor, Converter={x:Static conv:HexToBrushConverter.Instance}}">
+  <Window.Styles>
+    <Style Selector="controls|MarkdownEngineView ScrollViewer">
+      <Setter Property="Background" Value="Transparent"/>
+    </Style>
+  </Window.Styles>
+  <Window.Resources>
+    <!-- 独立实例，避免与主窗预览共用 PathToImageConverter 单例导致位图被释放 -->
+    <conv:PathToImageConverter x:Key="PreviewFullscreenPathToImage"/>
+  </Window.Resources>
+
+  <Panel>
+    <Border IsVisible="{Binding ShowPreviewImageWhenNotDiffing}"
+            Background="{Binding Config.Markdown.BackgroundColor, Converter={x:Static conv:HexToBrushConverter.Instance}}">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Auto">
+        <Image Source="{Binding PreviewImagePath, Converter={StaticResource PreviewFullscreenPathToImage}}"
+               Stretch="None"/>
+      </ScrollViewer>
+    </Border>
+    <controls:MarkdownEngineView IsVisible="{Binding ShowPreviewImageWhenNotDiffing, Converter={x:Static conv:InverseBoolConverter.Instance}}"
+                                 Markdown="{Binding CurrentMarkdown}"
+                                 MarkdownPreviewUpdatesEnabled="True"
+                                 StyleConfig="{Binding Config.Markdown}"
+                                 ZoomLevel="{Binding PreviewZoomLevel}"
+                                 Background="{Binding Config.Markdown.BackgroundColor, Converter={x:Static conv:HexToBrushConverter.Instance}}"/>
+  </Panel>
+</Window>

@@ -83,6 +83,8 @@ public partial class MainWindow : Window
         new DocxExporter(),
     ]);
 
+    private PreviewFullscreenWindow? _previewFullscreenWindow;
+
     private readonly EditorController _editorController;
 
     private MarkdownColorizer? _diffLeftColorizer;
@@ -248,6 +250,16 @@ public partial class MainWindow : Window
         {
             try
             {
+                try
+                {
+                    _previewFullscreenWindow?.Close();
+                }
+                catch
+                {
+                    // 子窗口关闭失败不影响主窗退出
+                }
+
+                _previewFullscreenWindow = null;
                 StopAllTimers();
                 vm.Config.Save(Core.AppConfig.DefaultConfigPath);
                 vm.SaveRecentState();
@@ -1806,11 +1818,36 @@ public partial class MainWindow : Window
         KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.OemMinus, KeyModifiers.Control), Command = new RelayCommand(() => { SyncActivePaneFromFocus(vm); vm.ZoomOutCommand.Execute(null); }) });
     }
 
+    private void OpenPreviewFullscreen()
+    {
+        if (DataContext is not MainViewModel vm || !vm.PreviewPaneLayoutVisible)
+            return;
+        try
+        {
+            _previewFullscreenWindow?.Close();
+            _previewFullscreenWindow = null;
+            var win = new PreviewFullscreenWindow();
+            _previewFullscreenWindow = win;
+            win.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(_previewFullscreenWindow, win))
+                    _previewFullscreenWindow = null;
+            };
+            var anchor = (Visual)(PreviewPaneGrid.IsVisible ? PreviewPaneGrid : this);
+            win.ShowFullscreen(this, anchor, vm);
+        }
+        catch
+        {
+            _previewFullscreenWindow = null;
+        }
+    }
+
     private void SetupPreviewContextMenu()
     {
         PreviewContextLayoutBoth.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.Both);
         PreviewContextLayoutEditorOnly.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.EditorOnly);
         PreviewContextLayoutPreviewOnly.Click += (_, _) => ApplyLayoutModeFromMenu(EditorLayoutMode.PreviewOnly);
+        PreviewContextFullscreen.Click += (_, _) => OpenPreviewFullscreen();
         PreviewContextCopy.Click += async (_, _) =>
         {
             if (PreviewEngine != null)
