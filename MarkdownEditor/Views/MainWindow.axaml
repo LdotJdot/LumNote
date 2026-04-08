@@ -6,15 +6,15 @@
         xmlns:core="clr-namespace:MarkdownEditor.Core"
         xmlns:models="clr-namespace:MarkdownEditor.Models"
         xmlns:services="clr-namespace:MarkdownEditor.Services"
+        xmlns:chrome="clr-namespace:Avalonia.Controls.Chrome;assembly=Avalonia.Controls"
         xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
         x:Class="MarkdownEditor.Views.MainWindow"
         x:Name="Root"
         x:DataType="vm:MainViewModel"
         x:CompileBindings="True"
-        Title="LumNote"
-        SystemDecorations="Full"
+        Title=""
+        WindowDecorations="Full"
         ExtendClientAreaToDecorationsHint="True"
-        ExtendClientAreaChromeHints="PreferSystemChrome"
         ExtendClientAreaTitleBarHeightHint="32"
         Width="1200"
         Height="800"
@@ -296,7 +296,10 @@
     <!-- 顶部：标题 + 菜单（VSCode 风格标题栏，可拖动、双击最大化，支持 Windows 停靠） -->
     <Border Grid.Row="0" Padding="8,0" Classes="titleBar">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto" Height="32">
-        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="2,0,12,0">
+        <StackPanel Orientation="Horizontal"
+                    VerticalAlignment="Center"
+                    Margin="2,0,12,0"
+                    chrome:WindowDecorationProperties.ElementRole="User">
           <Image Source="avares://MarkdownEditor/asserts/icon.ico" Width="16" Height="16" VerticalAlignment="Center"/>
           <TextBlock Text="{Binding TitleStatus}"
                      Margin="6,0,0,0"
@@ -305,7 +308,9 @@
                      FontWeight="SemiBold"/>
         </StackPanel>
 
-        <Menu Grid.Column="1" VerticalAlignment="Stretch">
+        <Menu Grid.Column="1"
+              VerticalAlignment="Stretch"
+              chrome:WindowDecorationProperties.ElementRole="User">
             <MenuItem Header="文件(_F)">
             <MenuItem Header="新建" x:Name="NewFileMenuItem"/>
             <MenuItem Header="打开文件夹..." x:Name="OpenFolderMenuItem"/>
@@ -338,14 +343,9 @@
 
         <Border Grid.Column="2"
                 x:Name="TitleDragArea"
-                Background="Transparent">
-          <TextBlock Text="{Binding CenterTitle}"
-                     TextTrimming="CharacterEllipsis"
-                     MaxWidth="320"
-                     HorizontalAlignment="Center"
-                     VerticalAlignment="Center"
-                     FontSize="13"
-                     IsHitTestVisible="False"/>
+                Background="Transparent"
+                chrome:WindowDecorationProperties.ElementRole="TitleBar">
+          <!-- 只保留左侧应用/文档标题（TitleStatus），避免在 v12 标题栏区域出现重复标题 -->
         </Border>
 
         <StackPanel Grid.Column="3"
@@ -620,7 +620,7 @@
                 <TextBlock Text="搜索" FontWeight="SemiBold" FontSize="12"/>
                 <TextBox x:Name="SearchQueryTextBox"
                          Text="{Binding SearchQuery}"
-                         Watermark="搜索文档..."
+                         PlaceholderText="搜索文档..."
                          FontSize="12"
                          Padding="6,4"/>
               </StackPanel>
@@ -791,7 +791,7 @@
                     <StackPanel Grid.Row="0" Spacing="4" IsVisible="{Binding GitPaneViewModel.ShowCommitWorkspace}">
                       <TextBox x:Name="GitCommitMessageTextBox"
                                Text="{Binding GitPaneViewModel.CommitMessage, Mode=TwoWay}"
-                               Watermark="提交说明（Commit message）"
+                              PlaceholderText="提交说明（Commit message）"
                                FontSize="12" Padding="8,6" MinHeight="36" AcceptsReturn="True"
                                IsReadOnly="{Binding GitPaneViewModel.IsCommitting}"
                                GotFocus="GitCommitMessageTextBox_OnGotFocus"/>
@@ -1335,7 +1335,7 @@
                   <MenuItem Header="仅预览" x:Name="PreviewContextLayoutPreviewOnly"/>
                 </MenuItem>
                 <MenuItem Header="-"/>
-                <MenuItem Header="全屏演示（新窗口）" x:Name="PreviewContextFullscreen"
+                <MenuItem Header="全屏演示" x:Name="PreviewContextFullscreen"
                           IsEnabled="{Binding PreviewPaneLayoutVisible}"
                           ToolTip.Tip="在新窗口全屏显示预览；Esc 或右键退出"/>
                 <MenuItem Header="-"/>

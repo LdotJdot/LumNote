@@ -33,7 +33,7 @@ public interface ILayoutEnvironment
     float MeasureMathInline(string latex);
     (float w, float h) GetImageIntrinsicSize(string url, float maxWidth);
 
-    IReadOnlyList<string> BreakTextWithWrap(string text, float maxWidth, SKPaint paint);
+    IReadOnlyList<string> BreakTextWithWrap(string text, float maxWidth, SKFont font);
     string FlattenInlines(IReadOnlyList<InlineNode> nodes);
     (string text, RunStyle style, string? linkUrl, string? footnoteRefId) FlattenInline(InlineNode n);
 

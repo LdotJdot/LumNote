@@ -75,16 +75,19 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="11.3.12" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.12" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.12" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.12" />
-    <PackageReference Include="Avalonia.Skia" Version="11.3.12" />
+    <PackageReference Include="Avalonia" Version="12.0.0" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.0.0" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.0" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.0" />
+    <PackageReference Include="Avalonia.Skia" Version="12.0.0" />
     <PackageReference Include="DiffPlex" Version="1.7.2" />
     <PackageReference Include="System.Reactive" Version="6.0.1" />
-    <PackageReference Include="Avalonia.AvaloniaEdit" Version="11.4.0" />
     <PackageReference Include="LumConfig" Version="1.0.3" />
     <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\external\AvaloniaEdit\src\AvaloniaEdit\AvaloniaEdit.csproj" />
   </ItemGroup>
 
 </Project>

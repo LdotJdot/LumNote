@@ -26,8 +26,7 @@ internal sealed class SkiaPrefixWidthCache
     public float[]? GetOrBuildPrefixWidths(
         string text,
         RunStyle style,
-        SKPaint paint,
-        Action<RunStyle, SKPaint> configureForStyle)
+        SKFont font)
     {
         if (string.IsNullOrEmpty(text) || text.Length < MinTextLength)
             return null;
@@ -39,11 +38,10 @@ internal sealed class SkiaPrefixWidthCache
         if (_map.Count >= MaxEntries)
             EvictOldest();
 
-        configureForStyle(style, paint);
         var widths = new float[text.Length + 1];
         for (int i = 1; i <= text.Length; i++)
         {
-            widths[i] = paint.MeasureText(text.AsSpan(0, i));
+            widths[i] = font.MeasureText(text.AsSpan(0, i));
             LayoutDiagnostics.OnSkiaMeasureText();
         }
 

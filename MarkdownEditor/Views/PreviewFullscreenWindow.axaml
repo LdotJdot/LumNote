@@ -10,7 +10,7 @@
         Width="400"
         Height="300"
         WindowStartupLocation="Manual"
-        SystemDecorations="None"
+        WindowDecorations="None"
         Background="{Binding Config.Markdown.BackgroundColor, Converter={x:Static conv:HexToBrushConverter.Instance}}">
   <Window.Styles>
     <Style Selector="controls|MarkdownEngineView ScrollViewer">

@@ -32,7 +32,7 @@
                Margin="0,0,0,6"/>
     <TextBox x:Name="BranchNameBox"
              Grid.Row="3"
-             Watermark="例如：dev、feature-notes"
+             PlaceholderText="例如：dev、feature-notes"
              FontSize="12"
              Padding="8,6"
              MinHeight="36"

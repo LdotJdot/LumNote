@@ -11,7 +11,7 @@
   <Grid Margin="14,12" RowDefinitions="Auto,Auto">
     <TextBox x:Name="PathTextBox"
              Grid.Row="0"
-             Watermark="路径或 https://…"
+             PlaceholderText="路径或 https://…"
              MinHeight="34"
              FontSize="12"
              Padding="10,8"

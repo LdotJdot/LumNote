@@ -328,14 +328,10 @@ public static partial class MathSkiaRenderer
         {
             if (string.IsNullOrEmpty(text))
                 return true;
-            using var paint = new SKPaint
-            {
-                Typeface = MathTypeface,
-                TextSize = BaseFontSize
-            };
             try
             {
-                return paint.ContainsGlyphs(text);
+                using var font = new SKFont(MathTypeface, BaseFontSize);
+                return font.ContainsGlyphs(text);
             }
             catch
             {
@@ -377,8 +373,7 @@ public static partial class MathSkiaRenderer
             _font = font;
             _paint = paint;
 
-            using var measurePaint = new SKPaint { Typeface = font.Typeface, TextSize = font.Size };
-            Width = measurePaint.MeasureText(_text);
+            Width = font.MeasureText(_text);
 
             // SkiaSharp 的 SKFont 暴露 Metrics 属性，而不是 GetMetrics 方法
             var m = font.Metrics;

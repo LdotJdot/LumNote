@@ -39,6 +39,7 @@ public sealed class SkiaRenderer : ITextMeasurer
     private readonly IImageLoader? _imageLoader;
     private readonly IBlockPainter[] _blockPainters;
     private readonly bool _enableBlockPictureCache;
+    private readonly object _blockPictureCacheGate = new();
     private Dictionary<int, (ulong Sig, SKPicture Pic)>? _blockPictureCache;
 
     public SkiaRenderer(EngineConfig? config = null, IImageLoader? imageLoader = null)
@@ -62,7 +63,6 @@ public sealed class SkiaRenderer : ITextMeasurer
         _textPaint = new SKPaint
         {
             IsAntialias = true,
-            SubpixelText = true,
             Color = FromUint(config.TextColor)
         };
         _codeBgPaint = new SKPaint { Color = FromUint(config.CodeBackground) };
@@ -91,24 +91,30 @@ public sealed class SkiaRenderer : ITextMeasurer
     /// <summary>布局或资源变化时丢弃块级录制缓存，避免陈旧位图（例如图片异步加载完成后调用）。</summary>
     public void InvalidateBlockPictureCache()
     {
-        if (_blockPictureCache == null)
-            return;
-        foreach (var kv in _blockPictureCache)
-            kv.Value.Pic.Dispose();
-        _blockPictureCache.Clear();
+        lock (_blockPictureCacheGate)
+        {
+            if (_blockPictureCache == null)
+                return;
+            foreach (var kv in _blockPictureCache)
+                kv.Value.Pic.Dispose();
+            _blockPictureCache.Clear();
+        }
     }
 
     /// <summary>移除指定文档块索引区间 [startInclusive, endExclusive) 的块图缓存条目。</summary>
     public void InvalidateBlockPictureCacheRange(int startInclusive, int endExclusive)
     {
-        if (_blockPictureCache == null || startInclusive >= endExclusive)
-            return;
-        for (int k = startInclusive; k < endExclusive; k++)
+        lock (_blockPictureCacheGate)
         {
-            if (_blockPictureCache.TryGetValue(k, out var prev))
+            if (_blockPictureCache == null || startInclusive >= endExclusive)
+                return;
+            for (int k = startInclusive; k < endExclusive; k++)
             {
-                prev.Pic.Dispose();
-                _blockPictureCache.Remove(k);
+                if (_blockPictureCache.TryGetValue(k, out var prev))
+                {
+                    prev.Pic.Dispose();
+                    _blockPictureCache.Remove(k);
+                }
             }
         }
     }
@@ -116,18 +122,21 @@ public sealed class SkiaRenderer : ITextMeasurer
     /// <summary>块数量变化时移除无效键（如文档变短后避免孤儿条目占内存）。</summary>
     public void PruneBlockPictureCacheBeyondBlockCount(int blockCount)
     {
-        if (_blockPictureCache == null || blockCount <= 0)
-            return;
-        var toRemove = new List<int>();
-        foreach (var key in _blockPictureCache.Keys)
+        lock (_blockPictureCacheGate)
         {
-            if (key < 0 || key >= blockCount)
-                toRemove.Add(key);
-        }
-        foreach (var k in toRemove)
-        {
-            _blockPictureCache[k].Pic.Dispose();
-            _blockPictureCache.Remove(k);
+            if (_blockPictureCache == null || blockCount <= 0)
+                return;
+            var toRemove = new List<int>();
+            foreach (var key in _blockPictureCache.Keys)
+            {
+                if (key < 0 || key >= blockCount)
+                    toRemove.Add(key);
+            }
+            foreach (var k in toRemove)
+            {
+                _blockPictureCache[k].Pic.Dispose();
+                _blockPictureCache.Remove(k);
+            }
         }
     }
 
@@ -275,6 +284,7 @@ public sealed class SkiaRenderer : ITextMeasurer
             };
             font = new SKFont(SKTypeface.FromFamilyName(body.FamilyName, fs), size);
         }
+        font.Subpixel = true;
         _fontCache[style] = font;
         return font;
     }
@@ -422,28 +432,31 @@ public sealed class SkiaRenderer : ITextMeasurer
 
             if (usePictureCache && block.Bounds.Width > 0.5f && block.Bounds.Height > 0.5f)
             {
-                _blockPictureCache ??= new Dictionary<int, (ulong Sig, SKPicture Pic)>();
-                ulong sig = BlockPictureSignature(block, scale);
-                SKPicture? oldPic = null;
-                if (_blockPictureCache.TryGetValue(block.BlockIndex, out var prev))
+                lock (_blockPictureCacheGate)
                 {
-                    if (prev.Sig == sig)
+                    _blockPictureCache ??= new Dictionary<int, (ulong Sig, SKPicture Pic)>();
+                    ulong sig = BlockPictureSignature(block, scale);
+                    SKPicture? oldPic = null;
+                    if (_blockPictureCache.TryGetValue(block.BlockIndex, out var prev))
                     {
-                        canvas.DrawPicture(prev.Pic, block.Bounds.Left, block.Bounds.Top);
-                        continue;
+                        if (prev.Sig == sig)
+                        {
+                            canvas.DrawPicture(prev.Pic, block.Bounds.Left, block.Bounds.Top);
+                            continue;
+                        }
+                        oldPic = prev.Pic;
                     }
-                    oldPic = prev.Pic;
-                }
-                oldPic?.Dispose();
+                    oldPic?.Dispose();
 
-                using var recorder = new SKPictureRecorder();
-                var bounds = new SKRect(0, 0, block.Bounds.Width, block.Bounds.Height);
-                var recordCanvas = recorder.BeginRecording(bounds);
-                PaintBlockContent(recordCanvas, block, scale, selection);
-                var picture = recorder.EndRecording();
-                _blockPictureCache[block.BlockIndex] = (sig, picture);
-                canvas.DrawPicture(picture, block.Bounds.Left, block.Bounds.Top);
-                continue;
+                    using var recorder = new SKPictureRecorder();
+                    var bounds = new SKRect(0, 0, block.Bounds.Width, block.Bounds.Height);
+                    var recordCanvas = recorder.BeginRecording(bounds);
+                    PaintBlockContent(recordCanvas, block, scale, selection);
+                    var picture = recorder.EndRecording();
+                    _blockPictureCache[block.BlockIndex] = (sig, picture);
+                    canvas.DrawPicture(picture, block.Bounds.Left, block.Bounds.Top);
+                    continue;
+                }
             }
 
             canvas.Save();
@@ -548,9 +561,8 @@ public sealed class SkiaRenderer : ITextMeasurer
             (run.Style == RunStyle.Code || IsCodeBlockHighlightStyle(run.Style)) && ContainsCjk(run.Text)
                 ? GetCodeCjkFont()
                 : GetFont(run.Style);
-        using var paint = new SKPaint { Typeface = font.Typeface, TextSize = font.Size };
-        var left = startInRun > 0 ? paint.MeasureText(run.Text.AsSpan(0, startInRun)) : 0;
-        var width = paint.MeasureText(run.Text.AsSpan(startInRun, endInRun - startInRun));
+        var left = startInRun > 0 ? font.MeasureText(run.Text.AsSpan(0, startInRun)) : 0;
+        var width = font.MeasureText(run.Text.AsSpan(startInRun, endInRun - startInRun));
         // 表格 run.Bounds 已是该片段在单元格内的实际矩形，无需再加内边距
         return (run.Bounds.Left + left, width);
     }
@@ -622,7 +634,6 @@ public sealed class SkiaRenderer : ITextMeasurer
                     ? GetCodeTokenColor(run.Style)
                     : _textPaint.Color;
             _textPaint.Color = textColor;
-            _textPaint.TextSize = font.Size;
             var drawText = GetDrawableText(run.Text);
             float textX = run.Bounds.Left;
             float textY = run.Bounds.Bottom - 4;
@@ -712,13 +723,13 @@ public sealed class SkiaRenderer : ITextMeasurer
         var font = GetFont(RunStyle.Normal);
         var size = _baseFontSize * 0.75f;
         var smallFont = new SKFont(font.Typeface, size);
+        smallFont.Subpixel = true;
         var drawText = GetDrawableText(run.Text);
         float textX = run.Bounds.Left;
         float baselineY = run.Bounds.Bottom - 4;
         float raise = _baseFontSize * 0.35f;
         var baseColor = _textPaint.Color;
         _textPaint.Color = FromLinkColor();
-        _textPaint.TextSize = size;
         canvas.DrawText(drawText, textX, baselineY - raise, smallFont, _textPaint);
         _textPaint.Color = baseColor;
     }
@@ -770,7 +781,6 @@ public sealed class SkiaRenderer : ITextMeasurer
     private void DrawImagePlaceholder(SKCanvas canvas, SKRect rect, string? alt)
     {
         canvas.DrawRect(rect, _imagePlaceholderPaint);
-        _textPaint.TextSize = _baseFontSize * 0.9f;
         var altDraw = GetDrawableText(string.IsNullOrEmpty(alt) ? "[图]" : alt);
         canvas.DrawText(
             altDraw,
@@ -832,15 +842,8 @@ public sealed class SkiaRenderer : ITextMeasurer
             return w + 8f;
         }
         var font = GetFont(style);
-        using var paint = new SKPaint
-        {
-            Typeface = font.Typeface,
-            TextSize = font.Size,
-            SubpixelText = true,
-            IsAntialias = true
-        };
-        // 与绘制相同 Typeface/TextSize；+1 像素安全余量，吸收舍入或个别测量偏差
-        return paint.MeasureText(text) + 1f;
+        // 与绘制相同字体；+1 像素安全余量，吸收舍入或个别测量偏差
+        return font.MeasureText(text) + 1f;
     }
 
     /// <summary>与布局中表格起始边距一致，按列宽绘制网格和表头背景，不依赖 run 边界。</summary>

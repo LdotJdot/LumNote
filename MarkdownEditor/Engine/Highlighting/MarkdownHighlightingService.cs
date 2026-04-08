@@ -455,56 +455,6 @@ public sealed class MarkdownHighlightingService
     {
         // 目前暂时关闭行内高亮，避免与 MarkdownParser 的内容索引偏移导致颜色错位。
         // 如需重新启用，可在此处基于 AST 重新计算精确列范围。
-        return;
-
-        // 拼块文本
-        var sb = new System.Text.StringBuilder();
-        for (int i = span.StartLine; i < span.EndLine; i++)
-        {
-            if (i > span.StartLine)
-                sb.Append('\n');
-            sb.Append(doc.GetLine(i).ToString());
-        }
-        var text = sb.ToString();
-        if (text.Length == 0)
-            return;
-
-        var ast = MarkdownParser.Parse(text);
-        var lineOffsets = ComputeLineOffsets(text);
-
-        foreach (var node in ast.Children)
-        {
-            if (node is ParagraphNode p)
-            {
-                AddInlineFromList(p.Content, span.StartLine, lineOffsets, output);
-            }
-            else if (node is HeadingNode h)
-            {
-                AddInlineFromList(h.Content, span.StartLine, lineOffsets, output);
-            }
-            else if (node is BulletListNode bl)
-            {
-                foreach (var item in bl.Items)
-                {
-                    foreach (var c in item.Content)
-                    {
-                        if (c is ParagraphNode pp)
-                            AddInlineFromList(pp.Content, span.StartLine, lineOffsets, output);
-                    }
-                }
-            }
-            else if (node is OrderedListNode ol)
-            {
-                foreach (var item in ol.Items)
-                {
-                    foreach (var c in item.Content)
-                    {
-                        if (c is ParagraphNode pp)
-                            AddInlineFromList(pp.Content, span.StartLine, lineOffsets, output);
-                    }
-                }
-            }
-        }
     }
 
     private static int[] ComputeLineOffsets(string text)

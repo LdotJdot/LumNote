@@ -266,10 +266,8 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
     {
         var lineH = _baseFontSize * _lineSpacing;
         // 使用与正文一致的字体/字号测量，避免箭头 run 宽度偏大导致可点击区域覆盖到左侧文字
-        var paint = _measurePaint;
-        paint.Typeface = GetBodyTypeface();
-        paint.TextSize = _baseFontSize;
-        var spaceW = paint.MeasureText(" ");
+        var bodyFont = new SKFont(GetBodyTypeface(), _baseFontSize);
+        var spaceW = bodyFont.MeasureText(" ");
         // 与旧实现保持一致：脚注区前留出一段间距，使其与正文分隔更明显（分隔线仍在 y=0 绘制）。
         y += _footnoteTopMargin;
         // 顶部留白（分隔线由 DrawFootnotesStyle 在 y=0 绘制），然后开始列表
@@ -291,10 +289,10 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                     var content = FlattenInlinesForFootnote(p.Content);
                     var fullText = prefix + content;
                     prefix = "";
-                    var segments = BreakTextWithWrap(fullText, width - fnIndent - _blockInnerPadding, paint);
+                    var segments = BreakTextWithWrap(fullText, width - fnIndent - _blockInnerPadding, bodyFont);
                     foreach (var seg in segments)
                     {
-                        var textW = paint.MeasureText(seg);
+                        var textW = bodyFont.MeasureText(seg);
                         var line = new LayoutLine { Y = y, Height = lineH };
                         line.Runs.Add(new LayoutRun(seg, new SKRect(fnIndent, y, fnIndent + textW, y + lineH), RunStyle.Normal, blockIndex, charOffset));
                         block.Lines.Add(line);
@@ -307,7 +305,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             {
                 // “↑”作为文末特殊符号追加在最后一行尾部，不单独占行；多引用时每条脚注仍只放一个 ↑（点后回正文首次引用处）。
                 var lastLine = block.Lines[^1];
-                var arrowW = paint.MeasureText(backArrow);
+                var arrowW = bodyFont.MeasureText(backArrow);
                 float runX = lastLine.Runs.Count > 0
                     ? lastLine.Runs[^1].Bounds.Right + spaceW
                     : fnIndent;
@@ -350,12 +348,9 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         var fontSize = h.Level switch { 1 => 28, 2 => 24, 3 => 20, 4 => 18, 5 => 16, _ => 14 };
         var plain = FlattenInlines(h.Content);
         var font = new SKFont(SKTypeface.FromFamilyName(GetBodyTypeface().FamilyName, SKFontStyle.Bold), fontSize);
-        var paint = _measurePaint;
-        paint.Typeface = font.Typeface;
-        paint.TextSize = font.Size;
         var lineH = fontSize * _lineSpacing;
         var innerW = width - _blockInnerPadding * 2;
-        var segments = BreakTextWithWrap(plain, innerW, paint);
+        var segments = BreakTextWithWrap(plain, innerW, font);
         foreach (var seg in segments)
         {
             var line = new LayoutLine { Y = y, Height = lineH };
@@ -409,8 +404,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             return;
         }
 
-        var paint = _measurePaint;
-        var wrappedLines = BreakInlineRunsIntoLines(runs, innerWidth, paint);
+        var wrappedLines = BreakInlineRunsIntoLines(runs, innerWidth);
         foreach (var lineRuns in wrappedLines)
         {
             FlushParagraphLine(block, lineRuns, lineH, ref y, block.BlockIndex, ref totalCharOffset, innerLeft);
@@ -426,12 +420,8 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         int offset = totalCharOffset;
         foreach (var (text, style, linkUrl, footnoteRefId) in runs)
         {
-            float w;
             var font = GetFont(IsRunStyleBold(style), IsRunStyleItalic(style), style == RunStyle.Code);
-            var paint = _measurePaint;
-            paint.Typeface = font.Typeface;
-            paint.TextSize = font.Size;
-            w = paint.MeasureText(text);
+            float w = font.MeasureText(text);
             line.Runs.Add(new LayoutRun(text, new SKRect(x, y, x + w, y + lineH), style, blockIndex, offset, linkUrl, null, footnoteRefId));
             offset += text.Length;
             x += w;
@@ -472,18 +462,12 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             else if (style == RunStyle.Image)
             {
                 var font = GetFont(false, false, false);
-                var paint = _measurePaint;
-                paint.Typeface = font.Typeface;
-                paint.TextSize = font.Size;
-                w = Math.Max(120, Math.Min(400, paint.MeasureText(text) + 24));
+                w = Math.Max(120, Math.Min(400, font.MeasureText(text) + 24));
             }
             else
             {
                 var font = GetFont(IsRunStyleBold(style), IsRunStyleItalic(style), style == RunStyle.Code);
-                var paint = _measurePaint;
-                paint.Typeface = font.Typeface;
-                paint.TextSize = font.Size;
-                w = paint.MeasureText(text);
+                w = font.MeasureText(text);
                 // 待办复选框 run 保证最小命中宽度，与绘制的小方框一致，避免误触到右侧链接
                 if (linkUrl != null && linkUrl.StartsWith("todo-toggle:", StringComparison.Ordinal))
                     w = Math.Max(w, 22f);
@@ -537,7 +521,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
     /// 支持 CJK 的断行，西文优先在空格处断。
     /// 返回 (行内容, 在原文中的起始索引, 在原文中的结束索引)
     /// </summary>
-    private static List<(string line, int start, int end)> BreakTextIntoLinesWithOffsets(string text, float maxWidth, SKPaint paint)
+    private static List<(string line, int start, int end)> BreakTextIntoLinesWithOffsets(string text, float maxWidth, SKFont font)
     {
         if (string.IsNullOrEmpty(text)) return [];
         var result = new List<(string, int, int)>();
@@ -599,7 +583,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             }
             while (start < content.Length)
             {
-                int end = FindBreakEnd(content, start, effectiveMaxWidth, paint);
+                int end = FindBreakEnd(content, start, effectiveMaxWidth, font);
                 if (end <= start) end = start + 1;
                 var seg = content[start..end];
                 var segStart = baseStart + start;
@@ -611,16 +595,16 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         return result;
     }
 
-    private static List<string> BreakTextWithWrap(string text, float maxWidth, SKPaint paint)
+    private static List<string> BreakTextWithWrap(string text, float maxWidth, SKFont font)
     {
-        var withOffsets = BreakTextIntoLinesWithOffsets(text, maxWidth, paint);
+        var withOffsets = BreakTextIntoLinesWithOffsets(text, maxWidth, font);
         var list = new List<string>(withOffsets.Count);
         for (int i = 0; i < withOffsets.Count; i++)
             list.Add(withOffsets[i].line);
         return list;
     }
 
-    private static int FindBreakEnd(string text, int start, float maxWidth, SKPaint paint)
+    private static int FindBreakEnd(string text, int start, float maxWidth, SKFont font)
     {
         if (start >= text.Length) return start;
         int len = text.Length - start;
@@ -630,7 +614,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         for (int i = start + 1; i <= text.Length; i++)
         {
             var span = text.AsSpan(start, i - start);
-            float w = paint.MeasureText(span);
+            float w = font.MeasureText(span);
             if (w <= maxWidth)
             {
                 lastGood = i;
@@ -689,8 +673,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                     : "";
                 if (string.IsNullOrEmpty(tokenText)) continue;
 
-                using var measurePaint = new SKPaint { Typeface = font.Typeface, TextSize = font.Size };
-                var tokenWidth = measurePaint.MeasureText(tokenText);
+                var tokenWidth = font.MeasureText(tokenText);
                 var runBounds = new SKRect(runX, y, runX + tokenWidth, y + lineHeight);
                 var runStyle = TokenKindToRunStyle(span.Kind);
                 layoutLine.Runs.Add(new LayoutRun(tokenText, runBounds, runStyle, block.BlockIndex, charOffset));
@@ -763,8 +746,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
 
         foreach (var codeLine in lines)
         {
-            using var measurePaint = new SKPaint { Typeface = font.Typeface, TextSize = font.Size };
-            float lineW = measurePaint.MeasureText(codeLine);
+            float lineW = font.MeasureText(codeLine);
             float runRight = left + lineW;
             var run = new LayoutRun(codeLine, new SKRect(left, y, runRight, y + lineHeight), RunStyle.Code, block.BlockIndex, charOffset);
             var layoutLine = new LayoutLine { Y = y, Height = lineHeight };
@@ -936,7 +918,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                 {
                     if (string.IsNullOrEmpty(text)) continue;
                     var effectiveStyle = GetEffectiveTableRunStyleForMeasure(style, isHeader);
-                    w += MeasureTableRun(text, effectiveStyle, paint);
+                    w += MeasureTableRun(text, effectiveStyle);
                 }
                 // 列宽需包含左右 padding，避免归一化后 innerW 不足导致文字超出右边界
                 w = Math.Min(maxColWidth, Math.Max(w + cellPaddingH + cellPaddingHRight, minColWidth));
@@ -1031,7 +1013,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                         {
                             if (string.IsNullOrEmpty(text)) continue;
                             var effectiveStyle = GetEffectiveTableRunStyleForMeasure(style, isHeader);
-                            totalLineW += MeasureTableRun(text, effectiveStyle, paint);
+                            totalLineW += MeasureTableRun(text, effectiveStyle);
                         }
                         float runX = align == TableCellAlign.Center
                             ? innerLeft + Math.Max(0, (innerW - totalLineW) / 2f)
@@ -1042,7 +1024,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                         {
                             if (string.IsNullOrEmpty(text)) continue;
                             var effectiveStyle = GetEffectiveTableRunStyleForMeasure(style, isHeader);
-                            float w = MeasureTableRun(text, effectiveStyle, paint);
+                            float w = MeasureTableRun(text, effectiveStyle);
                             var runStyle = isHeader ? RunStyle.TableHeaderCell : RunStyle.TableCell;
                             if (style == RunStyle.Math) runStyle = RunStyle.Math;
                             else if (style == RunStyle.Link) runStyle = RunStyle.Link;
@@ -1170,22 +1152,14 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         return originalStyle;
     }
 
-    /// <summary>为指定样式配置测量用的 SKPaint（字号、字体一致）。</summary>
-    private void ConfigurePaintForStyle(RunStyle style, SKPaint paint)
+    /// <summary>使用与渲染阶段完全一致的字体参数来测量指定样式的文本宽度。</summary>
+    private float MeasureTextForStyle(string text, RunStyle style)
     {
         bool bold = IsRunStyleBold(style);
         bool italic = IsRunStyleItalic(style);
         bool code = style is RunStyle.Code;
         var font = GetFont(bold, italic, code);
-        paint.Typeface = font.Typeface;
-        paint.TextSize = font.Size;
-    }
-
-    /// <summary>使用与渲染阶段完全一致的字体参数来测量指定样式的文本宽度。</summary>
-    private float MeasureTextForStyle(string text, RunStyle style, SKPaint paint)
-    {
-        ConfigurePaintForStyle(style, paint);
-        var w = paint.MeasureText(text);
+        var w = font.MeasureText(text);
         LayoutDiagnostics.OnSkiaMeasureText();
         return w;
     }
@@ -1219,8 +1193,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
     /// </summary>
     private List<List<(string text, RunStyle style, string? linkUrl, string? footnoteRefId)>> BreakInlineRunsIntoLines(
         List<(string text, RunStyle style, string? linkUrl, string? footnoteRefId)> runs,
-        float innerW,
-        SKPaint paint)
+        float innerW)
     {
         var result = new List<List<(string text, RunStyle style, string? linkUrl, string? footnoteRefId)>>();
         var currentLine = new List<(string text, RunStyle style, string? linkUrl, string? footnoteRefId)>();
@@ -1267,7 +1240,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                 while (remaining.Length > 0)
                 {
                     float spaceLeft = innerW - currentLineW;
-                    var (prefix, suffix) = BreakTextToFit(remaining, spaceLeft, paint, effectiveStyle);
+                    var (prefix, suffix) = BreakTextToFit(remaining, spaceLeft, effectiveStyle);
                     if (string.IsNullOrEmpty(prefix) && currentLine.Count > 0)
                     {
                         result.Add(currentLine);
@@ -1282,7 +1255,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                     }
 
                     currentLine.Add((prefix, style, linkUrl, footnoteRefId));
-                    currentLineW += MeasureTextForStyle(prefix, effectiveStyle, paint);
+                    currentLineW += MeasureTextForStyle(prefix, effectiveStyle);
                     remaining = suffix;
 
                     if (remaining.Length > 0)
@@ -1326,7 +1299,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                 continue;
 
             var effectiveStyle = GetEffectiveTableRunStyleForMeasure(style, isHeaderRow);
-            float Measure(string s) => tableMeasurer != null ? tableMeasurer.MeasureText(s, effectiveStyle) : (effectiveStyle == RunStyle.Math ? MeasureMathInline(s) : MeasureTextForStyle(s, effectiveStyle, paint));
+            float Measure(string s) => tableMeasurer != null ? tableMeasurer.MeasureText(s, effectiveStyle) : (effectiveStyle == RunStyle.Math ? MeasureMathInline(s) : MeasureTextForStyle(s, effectiveStyle));
 
             if (minRemainingToWrap > 0 && currentLine.Count > 0 && (innerW - currentLineW) < minRemainingToWrap)
             {
@@ -1359,7 +1332,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                     currentLineW = 0;
                 }
                 float spaceLeft = innerW - currentLineW;
-                var (prefix, suffix) = BreakTextToFit(remaining, spaceLeft, paint, effectiveStyle, tableMeasurer);
+                var (prefix, suffix) = BreakTextToFit(remaining, spaceLeft, effectiveStyle, tableMeasurer);
                 if (string.IsNullOrEmpty(prefix) && currentLine.Count > 0)
                 {
                     result.Add(currentLine);
@@ -1392,7 +1365,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
     /// 将 text 在 maxWidth 内截断为可绘制的前缀与剩余部分。tableMeasurer 非空时用其测量以与渲染一致。
     /// 优先按“词”断行（空格/Tab 处），若一整个单词都放不下，则退化为字符级断行。
     /// </summary>
-    private (string prefix, string suffix) BreakTextToFit(string text, float maxWidth, SKPaint paint, RunStyle style, ITextMeasurer? tableMeasurer = null)
+    private (string prefix, string suffix) BreakTextToFit(string text, float maxWidth, RunStyle style, ITextMeasurer? tableMeasurer = null)
     {
         if (string.IsNullOrEmpty(text) || maxWidth <= 0)
             return ("", text ?? "");
@@ -1424,12 +1397,12 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             return (text.Substring(0, breakPos), text.Substring(breakPos));
         }
 
-        ConfigurePaintForStyle(style, paint);
         var limitPaint = Math.Max(0, maxWidth - 2f);
         if (limitPaint <= 0)
             return ("", text);
 
-        var prefixWidths = _prefixWidthCache.GetOrBuildPrefixWidths(text, style, paint, ConfigurePaintForStyle);
+        var font = GetFont(IsRunStyleBold(style), IsRunStyleItalic(style), style is RunStyle.Code);
+        var prefixWidths = _prefixWidthCache.GetOrBuildPrefixWidths(text, style, font);
         if (prefixWidths != null)
         {
             if (prefixWidths[text.Length] <= limitPaint)
@@ -1460,7 +1433,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             return (text.Substring(0, breakPosP), text.Substring(breakPosP));
         }
 
-        if (paint.MeasureText(text) <= limitPaint)
+        if (font.MeasureText(text) <= limitPaint)
         {
             LayoutDiagnostics.OnSkiaMeasureText();
             return (text, "");
@@ -1469,7 +1442,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         int lastSpaceP2 = -1;
         for (int i = 1; i <= text.Length; i++)
         {
-            float w = paint.MeasureText(text.AsSpan(0, i));
+            float w = font.MeasureText(text.AsSpan(0, i));
             LayoutDiagnostics.OnSkiaMeasureText();
             if (w <= limitPaint)
             {
@@ -1505,11 +1478,11 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
     }
 
     /// <summary>表格内 run 宽度：有 Measurer 时与渲染一致，避免裁切；否则用布局自身测量。</summary>
-    private float MeasureTableRun(string text, RunStyle effectiveStyle, SKPaint paint)
+    private float MeasureTableRun(string text, RunStyle effectiveStyle)
     {
         if (_tableTextMeasurer != null)
             return _tableTextMeasurer.MeasureText(text, effectiveStyle);
-        return effectiveStyle == RunStyle.Math ? MeasureMathInline(text) : MeasureTextForStyle(text, effectiveStyle, paint);
+        return effectiveStyle == RunStyle.Math ? MeasureMathInline(text) : MeasureTextForStyle(text, effectiveStyle);
     }
 
     private static TableCellAlign? GetTableCellAlign(TableNode t, int c)
@@ -1560,9 +1533,6 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         var lineH = _baseFontSize * _lineSpacing;
         var defIndent = _blockInnerPadding + _definitionListIndent;
         var font = GetFont(false, false, false);
-        var paint = _measurePaint;
-        paint.Typeface = font.Typeface;
-        paint.TextSize = font.Size;
         int charOffset = 0;
 
         y += _blockInnerPadding;
@@ -1585,7 +1555,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                     var fullTextSb = new StringBuilder();
                     for (int ri = 0; ri < runs.Count; ri++)
                         fullTextSb.Append(runs[ri].text);
-                    var segments = BreakTextWithWrap(fullTextSb.ToString(), width - defIndent - _blockInnerPadding, paint);
+                    var segments = BreakTextWithWrap(fullTextSb.ToString(), width - defIndent - _blockInnerPadding, font);
                     int off = 0;
                     foreach (var seg in segments)
                     {
@@ -1617,9 +1587,6 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         var lineHeight = _baseFontSize * _lineSpacing;
         var contentLeft = leftMargin + _blockInnerPadding + _listItemIndent;
         var font = GetFont(false, false, false);
-        var paint = _measurePaint;
-        paint.Typeface = font.Typeface;
-        paint.TextSize = font.Size;
         int charOffset = 0;
         int number = ordered?.StartNumber ?? 1;
         for (int itemIndex = 0; itemIndex < items.Count; itemIndex++)
@@ -1643,7 +1610,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
 
             float prefixW = 0;
             foreach (var pr in prefixRuns)
-                prefixW += paint.MeasureText(pr.text);
+                prefixW += font.MeasureText(pr.text);
             var contentStart = contentLeft + prefixW;
             var availW = width - contentStart - _blockInnerPadding;
             if (availW <= 0) availW = width - contentLeft;
@@ -1659,7 +1626,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             if (contentRuns.Count == 0)
                 continue;
 
-            var wrappedLines = BreakInlineRunsIntoLines(contentRuns, availW, paint);
+            var wrappedLines = BreakInlineRunsIntoLines(contentRuns, availW);
 
             for (int i = 0; i < wrappedLines.Count; i++)
             {
@@ -1722,12 +1689,9 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                 RunStyle.Heading6 => 14,
                 _ => 20
             });
-        var paint = _measurePaint;
-        paint.Typeface = font.Typeface;
-        paint.TextSize = font.Size;
         for (int i = 1; i <= text.Length; i++)
         {
-            if (paint.MeasureText(text.AsSpan(0, i)) >= x) return i - 1;
+            if (font.MeasureText(text.AsSpan(0, i)) >= x) return i - 1;
         }
         return text.Length;
     }
@@ -1757,8 +1721,8 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
     float ILayoutEnvironment.MeasureMathInline(string latex) => MeasureMathInline(latex);
     (float, float) ILayoutEnvironment.GetImageIntrinsicSize(string url, float maxWidth) => GetImageIntrinsicSize(url, maxWidth);
 
-    IReadOnlyList<string> ILayoutEnvironment.BreakTextWithWrap(string text, float maxWidth, SKPaint paint)
-        => BreakTextWithWrap(text, maxWidth, paint);
+    IReadOnlyList<string> ILayoutEnvironment.BreakTextWithWrap(string text, float maxWidth, SKFont font)
+        => BreakTextWithWrap(text, maxWidth, font);
 
     string ILayoutEnvironment.FlattenInlines(IReadOnlyList<InlineNode> nodes)
         => FlattenInlines(nodes is List<InlineNode> list ? list : nodes.ToList());

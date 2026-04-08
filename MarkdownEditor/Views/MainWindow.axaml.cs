@@ -128,11 +128,14 @@ public partial class MainWindow : Window
             EditorTextBox?.Focus();
         };
 
-        // 根据窗口状态调整内边距，解决最大化时内容被挤到屏幕外的问题（Reactive 写法）
+        // 根据窗口状态调整内容区边距，解决最大化时内容被挤到屏幕外的问题。
+        // 注意：不要用 Window.Padding，否则会把自绘标题栏也一起下移，导致系统窗口按钮看起来“上浮/错位”。
         this.GetObservable(WindowStateProperty)
             .Subscribe(state =>
             {
-                Padding = state == WindowState.Maximized
+                if (MainAreaGrid == null)
+                    return;
+                MainAreaGrid.Margin = state == WindowState.Maximized
                     ? new Thickness(8, 8, 8, 8)
                     : new Thickness(0);
             });
@@ -1884,7 +1887,7 @@ public partial class MainWindow : Window
             PreviewEngine?.RenderControl.ResetEngine();
     }
 
-    private void OnWindowGotFocus(object? sender, GotFocusEventArgs e)
+    private void OnWindowGotFocus(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel vm) return;
         if (e.Source is not Visual focused) return;
@@ -3397,7 +3400,7 @@ public partial class MainWindow : Window
     private System.Threading.Tasks.Task ShowCommitMessageRequiredDialogAsync() =>
         ShowSimpleAlertAsync("无法提交", "请填写提交说明（Commit message）后再提交。");
 
-    private void GitCommitMessageTextBox_OnGotFocus(object? sender, GotFocusEventArgs e)
+    private void GitCommitMessageTextBox_OnGotFocus(object? sender, RoutedEventArgs e)
     {
         if (DataContext is MainViewModel vm && vm.GitPaneViewModel.SelectedRepositoryIsInitialized)
             vm.GitPaneViewModel.RefreshStatus();

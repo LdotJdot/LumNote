@@ -185,7 +185,7 @@ public sealed class DefaultImageLoader : IImageLoader
                         {
                             var scaled = full.Resize(
                                 ComputeResizeInfo(full.Width, full.Height, maxLongEdge),
-                                SKFilterQuality.Medium);
+                                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
                             full.Dispose();
                             return scaled;
                         }

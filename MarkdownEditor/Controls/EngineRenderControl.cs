@@ -4,6 +4,7 @@ using System.IO;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform;
@@ -250,7 +251,7 @@ public class EngineRenderControl : Control
     /// <summary>按内容区宽度与 DPI 推算嵌入图预览解码最长边，并与配置 Cap 取 min。</summary>
     private int ComputeImagePreviewBudget(float contentWidthDip, EngineConfig cfg)
     {
-        var scale = (float)(VisualRoot?.RenderScaling ?? 1.0);
+        var scale = (float)(TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0);
         var cap = Math.Max(256, cfg.ImagePreviewMaxLongEdgeCap);
         var mult = Math.Max(0.5f, cfg.ImagePreviewViewportScale);
         return (int)Math.Clamp(Math.Ceiling(contentWidthDip * scale * mult), 256, cap);

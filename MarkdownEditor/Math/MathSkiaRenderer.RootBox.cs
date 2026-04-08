@@ -164,8 +164,6 @@ public static partial class MathSkiaRenderer
         {
             using var radicalPaint = new SKPaint
             {
-                Typeface = _radicalFont.Typeface,
-                TextSize = _radicalFont.Size,
                 Color = _paint.Color,
                 IsAntialias = true,
                 Style = SKPaintStyle.Stroke,

@@ -25,12 +25,9 @@ public sealed class HeadingBlockLayouter : IBlockLayouter
         var plain = env.FlattenInlines(h.Content);
         var bodyTf = env.GetBodyTypeface();
         var font = new SKFont(SKTypeface.FromFamilyName(bodyTf.FamilyName, SKFontStyle.Bold), fontSize);
-        var paint = env.GetMeasurePaint();
-        paint.Typeface = font.Typeface;
-        paint.TextSize = font.Size;
         var lineH = fontSize * env.LineSpacing;
         var innerW = ctx.Width - env.BlockInnerPadding * 2;
-        var segments = env.BreakTextWithWrap(plain, innerW, paint);
+        var segments = env.BreakTextWithWrap(plain, innerW, font);
         float y = 0;
         var headingStyle = (RunStyle)((int)RunStyle.Heading1 + Math.Clamp(h.Level, 1, 6) - 1);
         foreach (var seg in segments)
