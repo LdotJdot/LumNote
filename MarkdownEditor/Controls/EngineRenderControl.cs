@@ -56,6 +56,8 @@ public class EngineRenderControl : Control
     }
 
     private RenderEngine? _engine;
+    private IImageLoader? _subscribedImageLoader;
+    private Action? _imageLoadedHandler;
     private SelectionRange? _selection;
     private (int block, int offset)? _anchor;
     private bool _selectionInvalidateScheduled;
@@ -113,7 +115,7 @@ public class EngineRenderControl : Control
         {
             if (_documentBasePath == value) return;
             _documentBasePath = value;
-            _engine = null;
+            DisposeEngine();
             InvalidateVisual();
         }
     }
@@ -182,7 +184,7 @@ public class EngineRenderControl : Control
         StyleConfigProperty.Changed.AddClassHandler<EngineRenderControl>(
             (c, _) =>
             {
-                c._engine = null;
+                c.DisposeEngine();
                 c._cachedEffectiveConfig = null;
                 c._cachedConfigStyleRef = null;
                 // 样式（包括背景色、字体大小等）变化时，确保当前帧重绘。
@@ -214,10 +216,25 @@ public class EngineRenderControl : Control
     /// <summary>清除引擎缓存，下次渲染时用当前 StyleConfig（含 ZoomLevel）重建。用于缩放等配置变更后刷新。</summary>
     public void ResetEngine()
     {
-        _engine = null;
+        DisposeEngine();
         _cachedEffectiveConfig = null;
         _cachedConfigStyleRef = null;
         InvalidateVisual();
+    }
+
+    private void DisposeEngine()
+    {
+        try
+        {
+            if (_subscribedImageLoader != null && _imageLoadedHandler != null)
+                _subscribedImageLoader.ImageLoaded -= _imageLoadedHandler;
+        }
+        catch { }
+        _subscribedImageLoader = null;
+        _imageLoadedHandler = null;
+
+        try { _engine?.Dispose(); } catch { }
+        _engine = null;
     }
 
     private RenderEngine? GetOrCreateEngine()
@@ -235,17 +252,25 @@ public class EngineRenderControl : Control
         imageLoader.ConfigurePreviewDecode(ComputeImagePreviewBudget(w, config), false);
         _engine = new RenderEngine(w, config, imageLoader);
         if (_engine.GetImageLoader() is { } loader)
-            loader.ImageLoaded += () =>
-                Dispatcher.UIThread.Post(() =>
-                {
-                    try
-                    {
-                        _engine?.InvalidateBlockPictureCache();
-                        InvalidateVisual();
-                    }
-                    catch { }
-                });
+        {
+            _subscribedImageLoader = loader;
+            _imageLoadedHandler = OnImageLoaded;
+            loader.ImageLoaded += _imageLoadedHandler;
+        }
         return _engine;
+    }
+
+    private void OnImageLoaded()
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                _engine?.InvalidateBlockPictureCache();
+                InvalidateVisual();
+            }
+            catch { }
+        });
     }
 
     /// <summary>按内容区宽度与 DPI 推算嵌入图预览解码最长边，并与配置 Cap 取 min。</summary>
@@ -288,7 +313,7 @@ public class EngineRenderControl : Control
             return;
         if (IsDocumentEmpty(doc))
         {
-            _engine = null;
+            DisposeEngine();
             InvalidateVisual();
             return;
         }
@@ -1034,7 +1059,7 @@ public class EngineRenderControl : Control
         if (IsDocumentEmpty(doc))
         {
             // 无实质内容时不创建渲染引擎，仅绘制背景，降低空文档内存（约数十 MB）
-            _engine = null;
+            DisposeEngine();
             DrawBackgroundOnly(context, bounds);
             return;
         }
@@ -1044,7 +1069,7 @@ public class EngineRenderControl : Control
         var w = (float)Math.Max(1, bounds.Width - config.ContentPaddingX * 2);
 
         if (_engine == null)
-            _engine = new RenderEngine(w, config);
+            _engine = GetOrCreateEngine();
         else
         {
             bool widthUnchanged = Math.Abs(w - _engine.GetWidth()) <= WidthTolerance;
@@ -1054,6 +1079,12 @@ public class EngineRenderControl : Control
                 _engine.SetWidth(w);
                 SyncImageLoaderPreviewBudget(_engine, w, config);
             }
+        }
+
+        if (_engine == null)
+        {
+            DrawBackgroundOnly(context, bounds);
+            return;
         }
 
         var viewportHeight = (float)bounds.Height;

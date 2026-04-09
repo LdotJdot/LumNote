@@ -615,7 +615,7 @@ public sealed partial class MainViewModel : ViewModelBase
             }
 
             // 统一行为：
-            // - 文档(.md/.txt)：打开并预览
+            // - 文本类（Markdown、JSON 等）：打开并编辑/预览
             // - 图片：作为标签页在右侧打开，与文档标签一起管理
             // - 文件夹：仅改变选中项
             if (value is { IsFolder: false } node)
@@ -1340,8 +1340,22 @@ public sealed partial class MainViewModel : ViewModelBase
     /// <summary>展开时且折叠条 hover 时显示收起三角。</summary>
     public bool ShowSidebarCollapseIcon => !IsSidebarCollapsed && IsSidebarCollapseStripHovered;
 
-    /// <summary>工作区展示与搜索共用的文件类型（当前仅 .md、.txt）。</summary>
-    private static readonly string[] FolderFilePatterns = ["*.md", "*.txt"];
+    /// <summary>
+    /// 工作区资源管理器枚举、文档列表与全文搜索共用的 glob。
+    /// 含 Markdown/纯文本、常见源码与配置、以及可预览的图片；搜索时会对图片扩展跳过（见后台搜索循环）。
+    /// </summary>
+    private static readonly string[] FolderFilePatterns =
+    [
+        "*.md", "*.mdx", "*.txt",
+        "*.json", "*.jsonc", "*.yaml", "*.yml", "*.xml", "*.csv", "*.toml", "*.ini",
+        "*.html", "*.htm", "*.css", "*.scss", "*.less",
+        "*.js", "*.jsx", "*.ts", "*.tsx", "*.mjs", "*.cjs", "*.vue", "*.svelte",
+        "*.cs", "*.fs", "*.vb", "*.cpp", "*.cc", "*.cxx", "*.h", "*.hpp", "*.c",
+        "*.py", "*.rs", "*.go", "*.java", "*.kt", "*.swift", "*.rb", "*.php", "*.sql", "*.r", "*.lua",
+        "*.sh", "*.bash", "*.zsh", "*.ps1", "*.bat", "*.cmd",
+        "*.log",
+        "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp", "*.svg",
+    ];
 
     public void LoadFolder(string path)
     {
@@ -1472,7 +1486,7 @@ public sealed partial class MainViewModel : ViewModelBase
         var selectedPath = _selectedTreeNode?.FullPath;
 
         RescanWorkspaceDocuments();
-        BuildFileTreeFromWorkspace();
+        BuildFileTreeFromWorkspace(rebuildVisibleTree: false);
 
         ApplyExpandedPaths(_fileTreeRoot, expandedPaths);
         EnsureExpandedFoldersLoaded(_fileTreeRoot);
@@ -1533,7 +1547,7 @@ public sealed partial class MainViewModel : ViewModelBase
         }
     }
 
-    /// <summary>仅扫描各工作区根目录下第一层文件，不递归；子目录内文件在展开时由 LoadChildrenForFolder 按需加入 _documents。</summary>
+    /// <summary>仅扫描各工作区根目录下第一层文件，不递归；子目录内文件在展开时由 LoadChildrenForFolder 按 <see cref="FolderFilePatterns"/> 按需加入 _documents。</summary>
     private void RescanWorkspaceDocuments()
     {
         _documents.Clear();
@@ -1562,8 +1576,11 @@ public sealed partial class MainViewModel : ViewModelBase
     }
 
     /// <summary>仅构建根节点，并只加载根下第一层；子文件夹在用户展开时再动态加载。</summary>
-    private void BuildFileTreeFromWorkspace()
+    /// <param name="rebuildVisibleTree">为 false 时不重建扁平列表（由调用方在恢复展开状态后统一重建，避免刷新时出现整树先折后展的闪烁）。</param>
+    private void BuildFileTreeFromWorkspace(bool rebuildVisibleTree = true)
     {
+        if (!rebuildVisibleTree)
+            _visibleFileTree.Clear();
         _fileTreeRoot.Clear();
         foreach (var rootPath in _workspaceFolderPaths)
         {
@@ -1577,7 +1594,8 @@ public sealed partial class MainViewModel : ViewModelBase
             LoadChildrenForFolder(rootNode);
             _fileTreeRoot.Add(rootNode);
         }
-        RebuildVisibleFileTree();
+        if (rebuildVisibleTree)
+            RebuildVisibleFileTree();
     }
 
     /// <summary>动态加载该文件夹下的直接子目录和文件（仅扫描当前层），并标记已加载；子目录内文件按需加入 _documents。</summary>
@@ -1899,6 +1917,11 @@ public sealed partial class MainViewModel : ViewModelBase
     public void OpenDocument(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
+        if (IsPreviewableImagePath(path))
+        {
+            OpenImageInTab(path);
+            return;
+        }
         LoadDocument(path);
     }
 
@@ -2576,6 +2599,10 @@ public sealed partial class MainViewModel : ViewModelBase
                         {
                             if (token.IsCancellationRequested) return;
                             filesSearched++;
+
+                            // 图片等二进制不按文本搜索，避免误读与无意义匹配
+                            if (ImageExtensions.Contains(Path.GetExtension(fullPath)))
+                                continue;
 
                             string text;
                             try

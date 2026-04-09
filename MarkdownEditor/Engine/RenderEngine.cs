@@ -10,13 +10,14 @@ namespace MarkdownEditor.Engine;
 /// 渲染引擎 - 统一入口
 /// 文档 → 块扫描 → 解析（含缓存）→ 布局快照 → 渲染
 /// </summary>
-public sealed class RenderEngine
+public sealed class RenderEngine : IDisposable
 {
     private readonly EngineConfig _config;
     private readonly ILayoutEngine _layout;
     private readonly SkiaRenderer _renderer;
     private readonly IImageLoader? _imageLoader;
     private float _width;
+    private bool _disposed;
 
     /// <summary>当前文档完整文本的行起始索引（用于从块内偏移换算到全局字符偏移）。</summary>
     private int[]? _fullTextLineStarts;
@@ -46,6 +47,28 @@ public sealed class RenderEngine
         _layout = layout ?? new SkiaLayoutEngine(_config, _imageLoader, _renderer);
     }
 
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+
+        try
+        {
+            _tileCache?.Dispose();
+        }
+        catch { }
+        _tileCache = null;
+
+        try
+        {
+            _renderer.InvalidateBlockPictureCache();
+        }
+        catch { }
+
+        try { _imageLoader?.Dispose(); } catch { }
+    }
+
     /// <summary>
     /// 使用解析得到的块列表快照更新当前块缓存。
     /// 内部会做脚注归一化。可由后台解析任务完成后在 UI 线程调用。
@@ -53,6 +76,8 @@ public sealed class RenderEngine
     public void ApplyBlocksSnapshot(BlockListSnapshot snapshot, IDocumentSource doc)
     {
         if (snapshot == null || doc == null)
+            return;
+        if (_disposed)
             return;
 
         var (normalizedBlocks, normalizedRanges) = NormalizeFootnotes(snapshot.Blocks, snapshot.Ranges);
@@ -76,6 +101,8 @@ public sealed class RenderEngine
     public void ApplyLayoutSnapshot(LayoutBlocksSnapshot snapshot)
     {
         if (snapshot == null)
+            return;
+        if (_disposed)
             return;
 
         // 将快照中的只读集合转换为内部可变结构，便于后续同步路径继续沿用。
@@ -110,6 +137,8 @@ public sealed class RenderEngine
     /// <summary>丢弃 Skia 块级录制缓存与视口瓦片缓存（布局变更或异步图片就绪时应调用）。</summary>
     public void InvalidateBlockPictureCache()
     {
+        if (_disposed)
+            return;
         _renderer.InvalidateBlockPictureCache();
         _tileCache?.Clear();
     }
@@ -136,6 +165,8 @@ public sealed class RenderEngine
 
     public void SetWidth(float width)
     {
+        if (_disposed)
+            return;
         var w = Math.Max(1, width);
         if (Math.Abs(w - _width) > 0.1f)
         {
@@ -251,6 +282,8 @@ public sealed class RenderEngine
         SelectionRange? selection, out float nextScrollY, bool fullBlocksOnly = false)
     {
         nextScrollY = scrollY + viewportHeight;
+        if (_disposed)
+            return;
         // 仅消费布局快照，不再在 UI 线程调用 EnsureLayout
         var layouts = _cachedLayouts;
         if (layouts == null || layouts.Count == 0)
@@ -306,6 +339,8 @@ public sealed class RenderEngine
     /// </summary>
     public (int blockIndex, int charOffset, bool isSelectable, string? linkUrl, int lineIndexInBlock)? HitTest(IDocumentSource doc, float contentX, float contentY)
     {
+        if (_disposed)
+            return null;
         if (_cachedLayouts == null)
             return null;
 
@@ -810,6 +845,8 @@ public sealed class RenderEngine
     /// </summary>
     public string GetSelectedText(IDocumentSource doc, SelectionRange sel)
     {
+        if (_disposed)
+            return "";
         if (sel.IsEmpty) return "";
         if (_cachedLayouts == null) return "";
         var (startBlock, startOff, endBlock, endOff) = (sel.StartBlock, sel.StartOffset, sel.EndBlock, sel.EndOffset);
@@ -855,6 +892,8 @@ public sealed class RenderEngine
     /// <summary>文档总高度（ScrollViewer 内容高度）。由布局快照提供，无快照时返回占位高度。</summary>
     public float MeasureTotalHeight(IDocumentSource doc)
     {
+        if (_disposed)
+            return _config.ExtraBottomPadding;
         if (_cachedLayouts == null || _cachedLayouts.Count == 0)
             return _config.ExtraBottomPadding;
         return _cachedTotalHeight;
@@ -867,6 +906,8 @@ public sealed class RenderEngine
     public void EnsureFullLayout(IDocumentSource doc)
     {
         if (doc == null)
+            return;
+        if (_disposed)
             return;
 
         var parseManager = new IncrementalParseManager();
@@ -889,6 +930,8 @@ public sealed class RenderEngine
     /// </summary>
     public float MeasureContentWidth(IDocumentSource doc)
     {
+        if (_disposed)
+            return Math.Max(1, _width - _config.BlockIndent) + _config.BlockIndent;
         if (_cachedLayouts != null && _cachedContentWidth > 0)
             return _cachedContentWidth;
         return Math.Max(1, _width - _config.BlockIndent) + _config.BlockIndent;
@@ -897,6 +940,8 @@ public sealed class RenderEngine
     /// <summary>脚注区顶部在内容坐标系中的 Y，用于点击脚注上标后滚动。无脚注时返回 null。</summary>
     public float? GetContentYForFootnoteSection(IDocumentSource doc)
     {
+        if (_disposed)
+            return null;
         if (_cachedLayouts != null)
         {
             foreach (var b in _cachedLayouts)
@@ -917,6 +962,8 @@ public sealed class RenderEngine
     public float? GetContentYForFirstFootnoteRefId(IDocumentSource doc, string id)
     {
         if (string.IsNullOrEmpty(id)) return null;
+        if (_disposed)
+            return null;
 
         if (_cachedLayouts != null)
         {
@@ -942,6 +989,8 @@ public sealed class RenderEngine
     /// <summary>指定块内字符偏移对应的内容 Y（用于 ↩︎ 回链滚动）。</summary>
     public float? GetContentYForBlockOffset(IDocumentSource doc, int blockIndex, int charOffset)
     {
+        if (_disposed)
+            return null;
         if (_cachedLayouts != null)
         {
             foreach (var block in _cachedLayouts)

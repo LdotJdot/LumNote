@@ -75,4 +75,6 @@ public sealed class BasePathImageLoader : IImageLoader
 
     public void ConfigurePreviewDecode(int maxLongEdgePixels, bool preferFullDecode = false) =>
         _inner.ConfigurePreviewDecode(maxLongEdgePixels, preferFullDecode);
+
+    public void Dispose() => _inner.Dispose();
 }

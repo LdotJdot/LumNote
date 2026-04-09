@@ -1,5 +1,5 @@
 using System.Collections.Concurrent;
-using System.Globalization;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading.Tasks;
 using MarkdownEditor.Core;
@@ -12,14 +12,27 @@ namespace MarkdownEditor.Engine.Render;
 /// </summary>
 public sealed class DefaultImageLoader : IImageLoader
 {
-    private readonly ConcurrentDictionary<string, SKBitmap?> _cache = new();
-    private readonly ConcurrentDictionary<string, (int w, int h)> _pixelSizes = new();
-    private readonly ConcurrentQueue<string> _evictionOrder = new();
+    private sealed class CacheEntry
+    {
+        public SKBitmap? Bitmap;
+        public int IntrinsicW;
+        public int IntrinsicH;
+        public int DecodedMaxLongEdge;
+        public bool FullDecode;
+        public bool Loading;
+        public long ApproxBytes;
+        public LinkedListNode<string>? LruNode;
+    }
+
+    private readonly Dictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
+    private readonly LinkedList<string> _lru = new();
     private readonly object _addLock = new();
     private readonly int _maxCachedImages;
 
     private bool _decodeFull;
     private int _previewMaxLongEdge = 1024;
+    private bool _disposed;
+    private long _currentBytes;
 
     public event Action? ImageLoaded;
 
@@ -49,35 +62,15 @@ public sealed class DefaultImageLoader : IImageLoader
         return 4096;
     }
 
-    /// <summary>仅在已持有 <see cref="_addLock"/> 时调用。</summary>
-    private string MakeCacheKey(string url)
+    private static long EstimateBytes(SKBitmap? bmp)
     {
-        if (_decodeFull)
-            return url + "\u0001full";
-        return url + "\u0001" + _previewMaxLongEdge.ToString(CultureInfo.InvariantCulture);
-    }
-
-    /// <summary>仅在已持有 <see cref="_addLock"/> 时调用。</summary>
-    private (int maxEdge, bool full) ReadDecodeParams() => (_previewMaxLongEdge, _decodeFull);
-
-    /// <summary>在已持有 <see cref="_addLock"/> 时写入缓存并视需要淘汰。</summary>
-    private void AddToCacheUnderLock(string key, SKBitmap? bmp, int intrinsicW, int intrinsicH)
-    {
-        _cache[key] = bmp;
-        if (intrinsicW > 0 && intrinsicH > 0)
-            _pixelSizes[key] = (intrinsicW, intrinsicH);
-        else
-            _pixelSizes.TryRemove(key, out _);
-
-        _evictionOrder.Enqueue(key);
-        while (_cache.Count > _maxCachedImages && _evictionOrder.TryDequeue(out var oldKey))
-        {
-            if (_cache.TryRemove(oldKey, out var oldBmp))
-            {
-                _pixelSizes.TryRemove(oldKey, out _);
-                oldBmp?.Dispose();
-            }
-        }
+        if (bmp == null)
+            return 0;
+        var w = bmp.Width;
+        var h = bmp.Height;
+        if (w <= 0 || h <= 0)
+            return 0;
+        return (long)w * h * 4;
     }
 
     /// <summary>是否应按网络 URL 加载（仅此路径使用 HttpClient）。</summary>
@@ -118,28 +111,53 @@ public sealed class DefaultImageLoader : IImageLoader
 
         if (s.Contains('%', StringComparison.Ordinal))
         {
-            try
-            {
-                s = Uri.UnescapeDataString(s);
-            }
+            try { s = Uri.UnescapeDataString(s); }
             catch { /* 保持原样 */ }
         }
 
         return s;
     }
 
+    /// <summary>必须在持有 <see cref="_addLock"/> 时调用。</summary>
+    private void TouchLru(string url, CacheEntry e)
+    {
+        if (e.LruNode != null)
+            _lru.Remove(e.LruNode);
+        e.LruNode = _lru.AddLast(url);
+    }
+
+    /// <summary>必须在持有 <see cref="_addLock"/> 时调用。</summary>
+    private void RemoveEntryUnderLock(string url, CacheEntry e)
+    {
+        if (e.LruNode != null)
+            _lru.Remove(e.LruNode);
+        if (e.Bitmap != null)
+        {
+            try { e.Bitmap.Dispose(); } catch { }
+            _currentBytes -= e.ApproxBytes;
+        }
+        _cache.Remove(url);
+    }
+
+    /// <summary>必须在持有 <see cref="_addLock"/> 时调用。</summary>
+    private void EnforceCapacityUnderLock()
+    {
+        while (_cache.Count > _maxCachedImages && _lru.First != null)
+        {
+            var key = _lru.First.Value;
+            if (_cache.TryGetValue(key, out var e))
+                RemoveEntryUnderLock(key, e);
+            else
+                _lru.RemoveFirst();
+        }
+    }
+
     /// <summary>预览解码：保持 <paramref name="intrinsicW"/>/<paramref name="intrinsicH"/> 为原图尺寸供布局比例；位图为缩小后的预览。</summary>
     private static SKBitmap? DecodeWithPreviewBudget(string path, int maxLongEdge, bool fullDecode, out int intrinsicW, out int intrinsicH)
     {
         intrinsicW = intrinsicH = 0;
-        try
-        {
-            path = Path.GetFullPath(path);
-        }
-        catch
-        {
-            return null;
-        }
+        try { path = Path.GetFullPath(path); }
+        catch { return null; }
 
         if (!File.Exists(path))
             return null;
@@ -268,17 +286,33 @@ public sealed class DefaultImageLoader : IImageLoader
     /// <summary>必须在持有 <see cref="_addLock"/> 时调用。</summary>
     private SKBitmap? TryGetImageUnderLock(string url)
     {
-        var key = MakeCacheKey(url);
-        if (_cache.TryGetValue(key, out var cached))
-            return cached;
+        if (_disposed)
+            return null;
+
+        if (!_cache.TryGetValue(url, out var entry))
+        {
+            entry = new CacheEntry();
+            _cache[url] = entry;
+            TouchLru(url, entry);
+            EnforceCapacityUnderLock();
+        }
+        else
+        {
+            TouchLru(url, entry);
+            if (entry.Bitmap != null && (!_decodeFull || entry.FullDecode))
+                return entry.Bitmap;
+            if (entry.Loading)
+                return null;
+        }
 
         var trimmed = PathSanitizer.Sanitize(url);
 
         if (IsNetworkImageUrl(trimmed))
         {
             var fetchUrl = trimmed.StartsWith("//", StringComparison.Ordinal) ? "https:" + trimmed : trimmed;
-            AddToCacheUnderLock(key, null, 0, 0);
-            var (edge, full) = ReadDecodeParams();
+            entry.Loading = true;
+            var edge = _previewMaxLongEdge;
+            var full = _decodeFull;
             _ = Task.Run(async () =>
             {
                 SKBitmap? bmp = null;
@@ -291,31 +325,64 @@ public sealed class DefaultImageLoader : IImageLoader
                     bmp = DecodeBytesWithPreviewBudget(bytes, edge, full, out iw, out ih);
                 }
                 catch { }
+
                 lock (_addLock)
                 {
-                    var k = MakeCacheKey(url);
-                    AddToCacheUnderLock(k, bmp, iw, ih);
+                    if (_disposed)
+                    {
+                        bmp?.Dispose();
+                        return;
+                    }
+                    if (!_cache.TryGetValue(url, out var e))
+                    {
+                        bmp?.Dispose();
+                        return;
+                    }
+                    e.Loading = false;
+                    if (e.Bitmap != null)
+                    {
+                        try { e.Bitmap.Dispose(); } catch { }
+                        _currentBytes -= e.ApproxBytes;
+                    }
+                    e.Bitmap = bmp;
+                    e.IntrinsicW = iw;
+                    e.IntrinsicH = ih;
+                    e.DecodedMaxLongEdge = edge;
+                    e.FullDecode = full;
+                    e.ApproxBytes = EstimateBytes(bmp);
+                    _currentBytes += e.ApproxBytes;
+                    TouchLru(url, e);
+                    EnforceCapacityUnderLock();
                 }
-                try
-                {
-                    ImageLoaded?.Invoke();
-                }
-                catch { }
+
+                try { ImageLoaded?.Invoke(); } catch { }
             });
             return null;
         }
 
         if (trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-        {
-            AddToCacheUnderLock(key, null, 0, 0);
             return null;
-        }
 
         var localPath = NormalizeLocalFilePath(trimmed);
-        var (maxEdge, fullRes) = ReadDecodeParams();
+        var maxEdge = _previewMaxLongEdge;
+        var fullRes = _decodeFull;
         var bmpLocal = DecodeWithPreviewBudget(localPath, maxEdge, fullRes, out var ow, out var oh);
-        AddToCacheUnderLock(key, bmpLocal, ow, oh);
-        return bmpLocal;
+
+        if (entry.Bitmap != null)
+        {
+            try { entry.Bitmap.Dispose(); } catch { }
+            _currentBytes -= entry.ApproxBytes;
+        }
+        entry.Bitmap = bmpLocal;
+        entry.IntrinsicW = ow;
+        entry.IntrinsicH = oh;
+        entry.DecodedMaxLongEdge = maxEdge;
+        entry.FullDecode = fullRes;
+        entry.ApproxBytes = EstimateBytes(bmpLocal);
+        _currentBytes += entry.ApproxBytes;
+        TouchLru(url, entry);
+        EnforceCapacityUnderLock();
+        return entry.Bitmap;
     }
 
     public void WithImage(string url, Action<SKBitmap?> action)
@@ -328,6 +395,11 @@ public sealed class DefaultImageLoader : IImageLoader
         }
         lock (_addLock)
         {
+            if (_disposed)
+            {
+                action(null);
+                return;
+            }
             var bmp = TryGetImageUnderLock(url);
             action(bmp);
         }
@@ -341,16 +413,50 @@ public sealed class DefaultImageLoader : IImageLoader
             return false;
         lock (_addLock)
         {
-            TryGetImageUnderLock(url);
-            var key = MakeCacheKey(url);
-            if (_pixelSizes.TryGetValue(key, out var wh) && wh.w > 0 && wh.h > 0)
+            if (_disposed)
+                return false;
+
+            if (_cache.TryGetValue(url, out var e) && e.IntrinsicW > 0 && e.IntrinsicH > 0)
             {
-                width = wh.w;
-                height = wh.h;
+                TouchLru(url, e);
+                width = e.IntrinsicW;
+                height = e.IntrinsicH;
                 return true;
             }
+
+            var trimmed = PathSanitizer.Sanitize(url);
+            if (IsNetworkImageUrl(trimmed) || trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var localPath = NormalizeLocalFilePath(trimmed);
+            try
+            {
+                using var codec = SKCodec.Create(localPath);
+                if (codec == null)
+                    return false;
+                var info = codec.Info;
+                if (info.Width <= 0 || info.Height <= 0)
+                    return false;
+
+                if (!_cache.TryGetValue(url, out e))
+                {
+                    e = new CacheEntry();
+                    _cache[url] = e;
+                    TouchLru(url, e);
+                    EnforceCapacityUnderLock();
+                }
+                e.IntrinsicW = info.Width;
+                e.IntrinsicH = info.Height;
+                TouchLru(url, e);
+                width = info.Width;
+                height = info.Height;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
-        return false;
     }
 
     public SKBitmap? TryGetImage(string url)
@@ -358,6 +464,28 @@ public sealed class DefaultImageLoader : IImageLoader
         if (string.IsNullOrEmpty(url))
             return null;
         lock (_addLock)
+        {
+            if (_disposed)
+                return null;
             return TryGetImageUnderLock(url);
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_addLock)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+
+            foreach (var kv in _cache)
+            {
+                try { kv.Value.Bitmap?.Dispose(); } catch { }
+            }
+            _cache.Clear();
+            _lru.Clear();
+            _currentBytes = 0;
+        }
     }
 }

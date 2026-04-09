@@ -5,7 +5,7 @@ namespace MarkdownEditor.Engine.Render;
 /// <summary>
 /// 图片加载器 - 用于从 URL 或路径加载图片
 /// </summary>
-public interface IImageLoader
+public interface IImageLoader : IDisposable
 {
     /// <summary>
     /// 尝试获取已加载的图片，若未加载则返回 null
@@ -66,4 +66,9 @@ public interface IImageLoader
     /// 异步加载完成后触发，便于界面重绘（可选实现）。
     /// </summary>
     event Action? ImageLoaded;
+
+    /// <summary>
+    /// 释放加载器持有的缓存与非托管资源（如位图像素缓冲）。
+    /// </summary>
+    void IDisposable.Dispose() { }
 }

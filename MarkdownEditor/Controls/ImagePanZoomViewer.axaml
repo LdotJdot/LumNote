@@ -1,0 +1,18 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="clr-namespace:MarkdownEditor.Converters"
+             x:Class="MarkdownEditor.Controls.ImagePanZoomViewer"
+             x:Name="Root"
+             x:CompileBindings="False">
+  <!-- 每实例独立转换器，避免与主窗/全屏预览共用单例时释放对方位图 -->
+  <UserControl.Resources>
+    <conv:PathToImageConverter x:Key="PathToImage"/>
+  </UserControl.Resources>
+  <Border x:Name="Viewport"
+          ClipToBounds="True"
+          Background="Transparent">
+    <Image x:Name="PreviewImage"
+           Stretch="None"
+           Source="{Binding SourcePath, ElementName=Root, Converter={StaticResource PathToImage}}"/>
+  </Border>
+</UserControl>

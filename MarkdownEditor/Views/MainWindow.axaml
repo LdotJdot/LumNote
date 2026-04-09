@@ -345,7 +345,14 @@
                 x:Name="TitleDragArea"
                 Background="Transparent"
                 chrome:WindowDecorationProperties.ElementRole="TitleBar">
-          <!-- 只保留左侧应用/文档标题（TitleStatus），避免在 v12 标题栏区域出现重复标题 -->
+          <TextBlock Text="{Binding CenterTitle}"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center"
+                     TextTrimming="CharacterEllipsis"
+                     FontSize="12"
+                     Foreground="{DynamicResource EditorForeground}"
+                     IsHitTestVisible="False"
+                     MaxWidth="520"/>
         </Border>
 
         <StackPanel Grid.Column="3"
@@ -1354,11 +1361,7 @@
             <Border Grid.Row="0"
                     IsVisible="{Binding ShowPreviewImageWhenNotDiffing}"
                     Background="{Binding Config.Markdown.BackgroundColor, Converter={x:Static conv:HexToBrushConverter.Instance}}">
-              <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                            VerticalScrollBarVisibility="Auto">
-                <Image Source="{Binding PreviewImagePath, Converter={x:Static conv:PathToImageConverter.Instance}}"
-                       Stretch="None"/>
-              </ScrollViewer>
+              <controls:ImagePanZoomViewer SourcePath="{Binding PreviewImagePath}"/>
             </Border>
           </Grid>
 
