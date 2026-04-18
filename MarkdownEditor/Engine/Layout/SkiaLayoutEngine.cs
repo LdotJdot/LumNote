@@ -46,6 +46,9 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
     private SKFont? _italicFontCache;
     private SKFont? _codeFontCache;
     private SKTypeface? _mathTypeface;
+    private readonly string _emojiFontFamily;
+    private SKTypeface? _emojiTypeface;
+    private readonly Dictionary<float, SKFont> _emojiFontBySize = new();
 
     public bool RequiresRelayoutOnWidthChange => true;
 
@@ -55,6 +58,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         _imageLoader = imageLoader ?? new DefaultImageLoader();
         _tableTextMeasurer = tableTextMeasurer;
         _bodyFontFamily = config.BodyFontFamily;
+        _emojiFontFamily = config.EmojiFontFamily ?? "Segoe UI Emoji,Noto Color Emoji";
         _codeFontFamily = config.CodeFontFamily;
         _mathFontFamily = config.MathFontFamily;
         _mathFontFilePath = config.MathFontFilePath;
@@ -91,6 +95,41 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         }
         _bodyTypeface = SKTypeface.FromFamilyName("Microsoft YaHei UI");
         return _bodyTypeface;
+    }
+
+    private SKTypeface ResolveEmojiTypeface()
+    {
+        if (_emojiTypeface != null)
+            return _emojiTypeface;
+        foreach (var name in _emojiFontFamily.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var tf = SKTypeface.FromFamilyName(name.Trim());
+            if (tf != null)
+            {
+                _emojiTypeface = tf;
+                return tf;
+            }
+        }
+        try
+        {
+            _emojiTypeface = SKFontManager.Default.MatchCharacter(0x1F600);
+        }
+        catch
+        {
+            _emojiTypeface = null;
+        }
+        _emojiTypeface ??= GetBodyTypeface();
+        return _emojiTypeface;
+    }
+
+    private SKFont GetEmojiFont(float size)
+    {
+        if (_emojiFontBySize.TryGetValue(size, out var cached))
+            return cached;
+        var tf = ResolveEmojiTypeface();
+        cached = new SKFont(tf, size) { Subpixel = true };
+        _emojiFontBySize[size] = cached;
+        return cached;
     }
 
     /// <summary>
@@ -421,7 +460,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         foreach (var (text, style, linkUrl, footnoteRefId) in runs)
         {
             var font = GetFont(IsRunStyleBold(style), IsRunStyleItalic(style), style == RunStyle.Code);
-            float w = font.MeasureText(text);
+            float w = MeasureTextForStyle(text, style);
             line.Runs.Add(new LayoutRun(text, new SKRect(x, y, x + w, y + lineH), style, blockIndex, offset, linkUrl, null, footnoteRefId));
             offset += text.Length;
             x += w;
@@ -466,8 +505,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             }
             else
             {
-                var font = GetFont(IsRunStyleBold(style), IsRunStyleItalic(style), style == RunStyle.Code);
-                w = font.MeasureText(text);
+                w = MeasureTextForStyle(text, style);
                 // 待办复选框 run 保证最小命中宽度，与绘制的小方框一致，避免误触到右侧链接
                 if (linkUrl != null && linkUrl.StartsWith("todo-toggle:", StringComparison.Ordinal))
                     w = Math.Max(w, 22f);
@@ -521,7 +559,10 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
     /// 支持 CJK 的断行，西文优先在空格处断。
     /// 返回 (行内容, 在原文中的起始索引, 在原文中的结束索引)
     /// </summary>
-    private static List<(string line, int start, int end)> BreakTextIntoLinesWithOffsets(string text, float maxWidth, SKFont font)
+    private List<(string line, int start, int end)> BreakTextIntoLinesWithOffsets(
+        string text,
+        float maxWidth,
+        Func<ReadOnlySpan<char>, float> measurePrefix)
     {
         if (string.IsNullOrEmpty(text)) return [];
         var result = new List<(string, int, int)>();
@@ -583,7 +624,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             }
             while (start < content.Length)
             {
-                int end = FindBreakEnd(content, start, effectiveMaxWidth, font);
+                int end = FindBreakEnd(content, start, effectiveMaxWidth, measurePrefix);
                 if (end <= start) end = start + 1;
                 var seg = content[start..end];
                 var segStart = baseStart + start;
@@ -595,16 +636,29 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         return result;
     }
 
-    private static List<string> BreakTextWithWrap(string text, float maxWidth, SKFont font)
+    private List<string> BreakTextWithWrap(string text, float maxWidth, SKFont font)
     {
-        var withOffsets = BreakTextIntoLinesWithOffsets(text, maxWidth, font);
+        var emojiFont = GetEmojiFont(font.Size);
+        bool lineHasEmoji = EmojiAwareTextMetrics.ContainsLikelyEmoji(text);
+        float MeasurePrefix(ReadOnlySpan<char> sp)
+        {
+            var s = sp.ToString();
+            if (lineHasEmoji && EmojiAwareTextMetrics.ContainsLikelyEmoji(s))
+                return EmojiAwareTextMetrics.Measure(s, font, emojiFont);
+            return font.MeasureText(sp);
+        }
+        var withOffsets = BreakTextIntoLinesWithOffsets(text, maxWidth, MeasurePrefix);
         var list = new List<string>(withOffsets.Count);
-        for (int i = 0; i < withOffsets.Count; i++)
-            list.Add(withOffsets[i].line);
+        for (int j = 0; j < withOffsets.Count; j++)
+            list.Add(withOffsets[j].line);
         return list;
     }
 
-    private static int FindBreakEnd(string text, int start, float maxWidth, SKFont font)
+    private static int FindBreakEnd(
+        string text,
+        int start,
+        float maxWidth,
+        Func<ReadOnlySpan<char>, float> measurePrefix)
     {
         if (start >= text.Length) return start;
         int len = text.Length - start;
@@ -614,7 +668,7 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         for (int i = start + 1; i <= text.Length; i++)
         {
             var span = text.AsSpan(start, i - start);
-            float w = font.MeasureText(span);
+            float w = measurePrefix(span);
             if (w <= maxWidth)
             {
                 lastGood = i;
@@ -1159,7 +1213,18 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
         bool italic = IsRunStyleItalic(style);
         bool code = style is RunStyle.Code;
         var font = GetFont(bold, italic, code);
-        var w = font.MeasureText(text);
+        float w;
+        if (
+            !code
+            && EmojiAwareTextMetrics.IsEmojiAwareRunStyle(style)
+            && EmojiAwareTextMetrics.ContainsLikelyEmoji(text)
+        )
+        {
+            var emojiFont = GetEmojiFont(font.Size);
+            w = EmojiAwareTextMetrics.Measure(text, font, emojiFont);
+        }
+        else
+            w = font.MeasureText(text);
         LayoutDiagnostics.OnSkiaMeasureText();
         return w;
     }
@@ -1402,6 +1467,38 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
             return ("", text);
 
         var font = GetFont(IsRunStyleBold(style), IsRunStyleItalic(style), style is RunStyle.Code);
+        if (EmojiAwareTextMetrics.IsEmojiAwareRunStyle(style) && EmojiAwareTextMetrics.ContainsLikelyEmoji(text))
+        {
+            var emojiFont = GetEmojiFont(font.Size);
+            EmojiAwareTextMetrics.FillPrefixWidths(text, font, emojiFont, out var emojiWidths);
+            if (emojiWidths[text.Length] <= limitPaint)
+                return (text, "");
+            int loE = 0, hiE = text.Length;
+            while (loE < hiE)
+            {
+                int mid = (loE + hiE + 1) >> 1;
+                if (emojiWidths[mid] <= limitPaint)
+                    loE = mid;
+                else
+                    hiE = mid - 1;
+            }
+            int lastGoodE = loE;
+            if (lastGoodE == 0)
+                return (text.Substring(0, 1), text.Substring(1));
+            int lastSpaceE = -1;
+            for (int i = lastGoodE; i >= 1; i--)
+            {
+                char ch = text[i - 1];
+                if (ch == ' ' || ch == '\t')
+                {
+                    lastSpaceE = i;
+                    break;
+                }
+            }
+            int breakPosE = lastSpaceE > 0 ? lastSpaceE : lastGoodE;
+            return (text.Substring(0, breakPosE), text.Substring(breakPosE));
+        }
+
         var prefixWidths = _prefixWidthCache.GetOrBuildPrefixWidths(text, style, font);
         if (prefixWidths != null)
         {
@@ -1689,6 +1786,11 @@ public sealed class SkiaLayoutEngine : ILayoutEngine, ILayoutEnvironment
                 RunStyle.Heading6 => 14,
                 _ => 20
             });
+        if (EmojiAwareTextMetrics.IsEmojiAwareRunStyle(style) && EmojiAwareTextMetrics.ContainsLikelyEmoji(text))
+        {
+            var emojiFont = GetEmojiFont(font.Size);
+            return EmojiAwareTextMetrics.MeasureTextOffset(text, x, font, emojiFont);
+        }
         for (int i = 1; i <= text.Length; i++)
         {
             if (font.MeasureText(text.AsSpan(0, i)) >= x) return i - 1;

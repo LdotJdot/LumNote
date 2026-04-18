@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "sessions": [
+    {
+      "id": "sef788a466e594d0d9a0f284462343d52",
+      "title": "MarkdownEditor\u529F\u80FD\u6982\u89C8",
+      "closed": true,
+      "updatedUtc": "2026-04-17T06:31:29.7360960\u002B00:00"
+    },
+    {
+      "id": "sb96e88f115834934b12f3892e9ccf9dc",
+      "title": "\u661F\u671F\u67E5\u8BE2",
+      "closed": true,
+      "updatedUtc": "2026-04-17T06:31:29.7360988\u002B00:00"
+    },
+    {
+      "id": "s02f516fad4634975bb132d5e0900ebcf",
+      "title": "Markdown\u529F\u80FD\u6982\u89C8",
+      "closed": false,
+      "updatedUtc": "2026-04-17T06:32:53.7682551\u002B00:00"
+    }
+  ]
+}

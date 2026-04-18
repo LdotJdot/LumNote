@@ -1,0 +1,17 @@
+{
+  "format": "openlum-conversation",
+  "version": 1,
+  "savedAt": "2026-04-17T14:30:05.5789142\u002B08:00",
+  "workspace": "D:\\Desktop\\Document\\markdown\\",
+  "modelLabel": "deepseek-chat",
+  "messages": [
+    {
+      "role": "user",
+      "content": "\u4ECA\u5929\u5468\u51E0\uFF1F"
+    },
+    {
+      "role": "assistant",
+      "content": "\u003Csummary\u003E\u4ECA\u5929\u662F 2026-04-17\uFF0C\u661F\u671F\u4E94\u3002\u003C/summary\u003E"
+    }
+  ]
+}

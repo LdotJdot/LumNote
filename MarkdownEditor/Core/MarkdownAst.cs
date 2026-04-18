@@ -28,6 +28,9 @@ public readonly record struct LinkReferenceDefinition(string Url, string? Title)
 /// <summary>解析过程状态：收集链接引用定义，供行内 <c>[text][ref]</c> 消解。</summary>
 public sealed class MarkdownParseContext
 {
+    /// <summary>是否将 <c>:name:</c> 展开为 gemoji（GitHub 风格）。默认 true。</summary>
+    public bool EnableEmojiShortcodes { get; set; } = true;
+
     public Dictionary<string, LinkReferenceDefinition> LinkReferences { get; } =
         new(StringComparer.OrdinalIgnoreCase);
 

@@ -10,6 +10,9 @@ namespace MarkdownEditor.Engine.Document;
 /// </summary>
 internal sealed class IncrementalParseManager
 {
+    /// <summary>是否将 <c>:name:</c> 短码展开为 emoji（与 <see cref="Engine.EngineConfig.EnableEmojiShortcodes"/> 对齐）。</summary>
+    public bool EnableEmojiShortcodes { get; set; } = true;
+
     /// <summary>最新一次解析得到的原始块列表（尚未做脚注归一化）。</summary>
     public IReadOnlyList<MarkdownNode?> Blocks => _blocks;
 
@@ -47,7 +50,7 @@ internal sealed class IncrementalParseManager
                 break;
 
             var text = GetSpanText(doc, span);
-            var fullDoc = MarkdownParser.Parse(text);
+            var fullDoc = MarkdownParser.Parse(text, EnableEmojiShortcodes);
 
             foreach (var child in fullDoc.Children)
             {
@@ -132,7 +135,7 @@ internal sealed class IncrementalParseManager
             actualScanEndLine = Math.Max(actualScanEndLine, span.EndLine);
 
             var text = GetSpanText(doc, span);
-            var fullDoc = MarkdownParser.Parse(text);
+            var fullDoc = MarkdownParser.Parse(text, EnableEmojiShortcodes);
             foreach (var child in fullDoc.Children)
             {
                 if (child is EmptyLineNode el)

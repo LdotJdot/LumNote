@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Text;
 
@@ -10,9 +11,9 @@ namespace MarkdownEditor.Core;
 public static class MarkdownParser
 {
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DocumentNode Parse(ReadOnlySpan<char> input)
+    public static DocumentNode Parse(ReadOnlySpan<char> input, bool enableEmojiShortcodes = true)
     {
-        var ctx = new MarkdownParseContext();
+        var ctx = new MarkdownParseContext { EnableEmojiShortcodes = enableEmojiShortcodes };
         var lines = SplitLines(input);
         PreScanLinkReferences(lines, ctx);
         var blocks = ParseBlocks(lines, ctx);
@@ -20,9 +21,9 @@ public static class MarkdownParser
         return new DocumentNode { Children = blocks };
     }
 
-    public static DocumentNode Parse(string input)
+    public static DocumentNode Parse(string input, bool enableEmojiShortcodes = true)
     {
-        return Parse(input.AsSpan());
+        return Parse(input.AsSpan(), enableEmojiShortcodes);
     }
 
     private static List<string> SplitLines(ReadOnlySpan<char> input)
@@ -1608,11 +1609,36 @@ public static class MarkdownParser
                 }
             }
 
-            var ch = span[pos];
+            // GitHub / gemoji 风格 :name:（须在普通文本路径；行内代码等已提前 continue）
+            if (
+                span[pos] == ':'
+                && TryParseEmojiShortcode(span, pos, ctx, baseOffset, out var emojiNode, out int emojiConsumed)
+                && emojiNode != null
+            )
+            {
+                result.Add(emojiNode);
+                pos += emojiConsumed;
+                continue;
+            }
+
+            ReadOnlySpan<char> tail = span[pos..];
+            if (Rune.DecodeFromUtf16(tail, out Rune rune, out int runeLen) == OperationStatus.Done)
+            {
+                result.Add(
+                    new TextNode
+                    {
+                        Content = rune.ToString(),
+                        Span = new SourceSpan(baseOffset + pos, runeLen),
+                    }
+                );
+                pos += runeLen;
+                continue;
+            }
+
             result.Add(
                 new TextNode
                 {
-                    Content = ch.ToString(),
+                    Content = span[pos].ToString(),
                     Span = new SourceSpan(baseOffset + pos, 1),
                 }
             );
@@ -1620,6 +1646,58 @@ public static class MarkdownParser
         }
 
         return result;
+    }
+
+    /// <summary>匹配 <c>:+1:</c>、<c>:non-potable_water:</c> 等（名称含字母数字、下划线、加号、减号）。</summary>
+    private static bool TryParseEmojiShortcode(
+        ReadOnlySpan<char> span,
+        int pos,
+        MarkdownParseContext? ctx,
+        int baseOffset,
+        out TextNode? node,
+        out int consumed
+    )
+    {
+        node = null;
+        consumed = 0;
+        if (ctx != null && !ctx.EnableEmojiShortcodes)
+            return false;
+        if (pos >= span.Length || span[pos] != ':')
+            return false;
+        int i = pos + 1;
+        if (i >= span.Length)
+            return false;
+        int nameStart = i;
+        while (i < span.Length)
+        {
+            char c = span[i];
+            if (c == ':')
+            {
+                int nameLen = i - nameStart;
+                if (nameLen == 0)
+                    return false;
+                var name = span.Slice(nameStart, nameLen).ToString();
+                if (EmojiShortcodeRegistry.TryGet(name, out var emoji) && !string.IsNullOrEmpty(emoji))
+                {
+                    int total = i - pos + 1;
+                    node = new TextNode
+                    {
+                        Content = emoji,
+                        Span = new SourceSpan(baseOffset + pos, total),
+                    };
+                    consumed = total;
+                    return true;
+                }
+                return false;
+            }
+            if (char.IsAsciiLetterOrDigit(c) || c == '_' || c == '+' || c == '-')
+            {
+                i++;
+                continue;
+            }
+            break;
+        }
+        return false;
     }
 
     private static bool TryParseAutolink(

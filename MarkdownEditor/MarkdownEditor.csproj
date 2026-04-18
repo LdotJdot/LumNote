@@ -33,6 +33,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Core\Data\emoji.json"
+                      Condition="Exists('Core\Data\emoji.json')"
+                      LogicalName="MarkdownEditor.Core.Data.emoji.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <TrimmerRootDescriptor Include="TrimmerRoots.xml" />
     <None Update="Sample.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

@@ -30,11 +30,14 @@ public sealed class SkiaRenderer : ITextMeasurer
     private readonly string _bodyFontFamily;
     private readonly string _codeFontFamily;
     private readonly string _mathFontFamily;
+    private readonly string _emojiFontFamily;
     private readonly string? _mathFontFilePath;
     private readonly float _baseFontSize;
     private SKTypeface? _bodyTypeface;
     private SKTypeface? _mathTypeface;
+    private SKTypeface? _emojiTypeface;
     private SKFont? _codeCjkFont; // 代码块中含中文等 CJK 时的回退字体，避免等宽字体无字形显示为方块
+    private readonly Dictionary<float, SKFont> _emojiFontBySize = new();
     private readonly Dictionary<RunStyle, SKFont> _fontCache = new();
     private readonly IImageLoader? _imageLoader;
     private readonly IBlockPainter[] _blockPainters;
@@ -48,6 +51,7 @@ public sealed class SkiaRenderer : ITextMeasurer
         _bodyFontFamily = config.BodyFontFamily;
         _codeFontFamily = config.CodeFontFamily;
         _mathFontFamily = config.MathFontFamily;
+        _emojiFontFamily = config.EmojiFontFamily ?? "Segoe UI Emoji,Noto Color Emoji";
         _mathFontFilePath = config.MathFontFilePath;
         _baseFontSize = config.BaseFontSize;
 
@@ -298,6 +302,41 @@ public sealed class SkiaRenderer : ITextMeasurer
                 return tf;
         }
         return SKTypeface.FromFamilyName("Microsoft YaHei UI");
+    }
+
+    private SKTypeface ResolveEmojiTypeface()
+    {
+        if (_emojiTypeface != null)
+            return _emojiTypeface;
+        foreach (var name in _emojiFontFamily.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var tf = SKTypeface.FromFamilyName(name.Trim());
+            if (tf != null)
+            {
+                _emojiTypeface = tf;
+                return tf;
+            }
+        }
+        try
+        {
+            _emojiTypeface = SKFontManager.Default.MatchCharacter(0x1F600);
+        }
+        catch
+        {
+            _emojiTypeface = null;
+        }
+        _emojiTypeface ??= ResolveBodyTypeface();
+        return _emojiTypeface;
+    }
+
+    private SKFont GetEmojiFont(float size)
+    {
+        if (_emojiFontBySize.TryGetValue(size, out var cached))
+            return cached;
+        var tf = ResolveEmojiTypeface();
+        cached = new SKFont(tf, size) { Subpixel = true };
+        _emojiFontBySize[size] = cached;
+        return cached;
     }
 
     /// <summary>
@@ -561,8 +600,23 @@ public sealed class SkiaRenderer : ITextMeasurer
             (run.Style == RunStyle.Code || IsCodeBlockHighlightStyle(run.Style)) && ContainsCjk(run.Text)
                 ? GetCodeCjkFont()
                 : GetFont(run.Style);
-        var left = startInRun > 0 ? font.MeasureText(run.Text.AsSpan(0, startInRun)) : 0;
-        var width = font.MeasureText(run.Text.AsSpan(startInRun, endInRun - startInRun));
+        float left;
+        float width;
+        if (
+            EmojiAwareTextMetrics.IsEmojiAwareRunStyle(run.Style)
+            && EmojiAwareTextMetrics.ContainsLikelyEmoji(run.Text)
+        )
+        {
+            var emojiFont = GetEmojiFont(font.Size);
+            EmojiAwareTextMetrics.FillPrefixWidths(run.Text, font, emojiFont, out var widths);
+            left = startInRun > 0 ? widths[startInRun] : 0;
+            width = widths[endInRun] - widths[startInRun];
+        }
+        else
+        {
+            left = startInRun > 0 ? font.MeasureText(run.Text.AsSpan(0, startInRun)) : 0;
+            width = font.MeasureText(run.Text.AsSpan(startInRun, endInRun - startInRun));
+        }
         // 表格 run.Bounds 已是该片段在单元格内的实际矩形，无需再加内边距
         return (run.Bounds.Left + left, width);
     }
@@ -639,7 +693,13 @@ public sealed class SkiaRenderer : ITextMeasurer
             float textY = run.Bounds.Bottom - 4;
             if (isTableCell)
                 textY = run.Bounds.Bottom - 4;
-            canvas.DrawText(drawText, textX, textY, font, _textPaint);
+            if (EmojiAwareTextMetrics.IsEmojiAwareRunStyle(run.Style) && EmojiAwareTextMetrics.ContainsLikelyEmoji(drawText))
+            {
+                var emojiFont = GetEmojiFont(font.Size);
+                EmojiAwareTextMetrics.Draw(canvas, drawText, textX, textY, font, emojiFont, _textPaint);
+            }
+            else
+                canvas.DrawText(drawText, textX, textY, font, _textPaint);
 
             if (
                 isLinkStyle
@@ -730,7 +790,13 @@ public sealed class SkiaRenderer : ITextMeasurer
         float raise = _baseFontSize * 0.35f;
         var baseColor = _textPaint.Color;
         _textPaint.Color = FromLinkColor();
-        canvas.DrawText(drawText, textX, baselineY - raise, smallFont, _textPaint);
+        if (EmojiAwareTextMetrics.ContainsLikelyEmoji(drawText))
+        {
+            var emojiSmall = GetEmojiFont(smallFont.Size);
+            EmojiAwareTextMetrics.Draw(canvas, drawText, textX, baselineY - raise, smallFont, emojiSmall, _textPaint);
+        }
+        else
+            canvas.DrawText(drawText, textX, baselineY - raise, smallFont, _textPaint);
         _textPaint.Color = baseColor;
     }
 
@@ -782,13 +848,17 @@ public sealed class SkiaRenderer : ITextMeasurer
     {
         canvas.DrawRect(rect, _imagePlaceholderPaint);
         var altDraw = GetDrawableText(string.IsNullOrEmpty(alt) ? "[图]" : alt);
-        canvas.DrawText(
-            altDraw,
-            rect.Left + 4,
-            rect.Bottom - 6,
-            GetFont(RunStyle.Normal),
-            _textPaint
-        );
+        var altFont = GetFont(RunStyle.Normal);
+        if (EmojiAwareTextMetrics.ContainsLikelyEmoji(altDraw))
+            EmojiAwareTextMetrics.Draw(canvas, altDraw, rect.Left + 4, rect.Bottom - 6, altFont, GetEmojiFont(altFont.Size), _textPaint);
+        else
+            canvas.DrawText(
+                altDraw,
+                rect.Left + 4,
+                rect.Bottom - 6,
+                altFont,
+                _textPaint
+            );
     }
 
     private void DrawMathRun(SKCanvas canvas, LayoutRun run)
@@ -842,6 +912,11 @@ public sealed class SkiaRenderer : ITextMeasurer
             return w + 8f;
         }
         var font = GetFont(style);
+        if (EmojiAwareTextMetrics.IsEmojiAwareRunStyle(style) && EmojiAwareTextMetrics.ContainsLikelyEmoji(text))
+        {
+            var emojiFont = GetEmojiFont(font.Size);
+            return EmojiAwareTextMetrics.Measure(text, font, emojiFont) + 1f;
+        }
         // 与绘制相同字体；+1 像素安全余量，吸收舍入或个别测量偏差
         return font.MeasureText(text) + 1f;
     }

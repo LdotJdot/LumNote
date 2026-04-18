@@ -13,6 +13,13 @@ public sealed class EngineConfig
     public string CodeFontFamily { get; set; } =
         "Cascadia Code,Consolas,Microsoft YaHei Mono,monospace";
 
+    /// <summary>彩色 Emoji 字体候选（逗号分隔）。Windows 常用 Segoe UI Emoji；Linux 常用 Noto Color Emoji。</summary>
+    public string EmojiFontFamily { get; set; } =
+        "Segoe UI Emoji,Noto Color Emoji,Apple Color Emoji";
+
+    /// <summary>是否将 <c>:smile:</c> 等短码解析为 Unicode emoji。</summary>
+    public bool EnableEmojiShortcodes { get; set; } = true;
+
     /// <summary>
     /// 数学公式首选字体列表（逗号分隔，优先级从左到右），
     /// 建议包含 Latin Modern Math / STIX Two Math / Cambria Math 等支持 MATH 表的字体。
@@ -121,6 +128,8 @@ public sealed class EngineConfig
         {
             BodyFontFamily = BodyFontFamily,
             CodeFontFamily = CodeFontFamily,
+            EmojiFontFamily = EmojiFontFamily,
+            EnableEmojiShortcodes = EnableEmojiShortcodes,
             MathFontFamily = MathFontFamily,
             MathFontFilePath = MathFontFilePath,
             BaseFontSize = BaseFontSize * z,

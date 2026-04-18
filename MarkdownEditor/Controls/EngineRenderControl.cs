@@ -322,6 +322,7 @@ public class EngineRenderControl : Control
         if (engine == null)
             return;
         var config = EffectiveConfig;
+        _parseManager.EnableEmojiShortcodes = config.EnableEmojiShortcodes;
         var w = (float)
             Math.Max(1, (Bounds.Width > 0 ? Bounds.Width : 400) - config.ContentPaddingX * 2);
         engine.SetWidth(w);

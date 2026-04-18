@@ -910,7 +910,7 @@ public sealed class RenderEngine : IDisposable
         if (_disposed)
             return;
 
-        var parseManager = new IncrementalParseManager();
+        var parseManager = new IncrementalParseManager { EnableEmojiShortcodes = _config.EnableEmojiShortcodes };
         var blockSnapshot = parseManager.ReparseFull(doc);
         ApplyBlocksSnapshot(blockSnapshot, doc);
 
