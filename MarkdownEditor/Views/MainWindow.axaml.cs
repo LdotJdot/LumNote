@@ -2893,7 +2893,7 @@ public partial class MainWindow : Window
             Spacing = 10,
             Children =
             {
-                Para("Ver 1.0.0.5 @ 2026", FontWeight.SemiBold),
+                Para("Ver 1.0.0.6 @ 2026", FontWeight.SemiBold),
                 Para(
                     "We built this to solve our own problems. Now we maintain it to solve yours. Free forever. Works offline. No accounts, no tracking, no expiration date. Just a reliable tool that grows with you."
                 ),
